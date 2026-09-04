@@ -1,7 +1,7 @@
 # TellAviv — Windows release build (PowerShell)
 # Usage:
 #   .\tools\build_windows.ps1
-#   .\tools\build_windows.ps1 -ApiUrl https://api.tellaviv.example.com
+#   .\tools\build_windows.ps1 -ApiUrl http://192.168.1.8:3000
 # Output: frontend\build\windows\x64\runner\Release\  (input for Inno Setup)
 param(
   [string]$ApiUrl = $env:TELLAVIV_API_URL
@@ -10,7 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($ApiUrl)) {
-  $ApiUrl = 'https://api.tellaviv.example.com'
+  # Production backend (Render). Override via -ApiUrl for LAN testing.
+  $ApiUrl = 'https://tellaviv-backend.onrender.com'
   Write-Host "No -ApiUrl given, using $ApiUrl" -ForegroundColor Yellow
 }
 

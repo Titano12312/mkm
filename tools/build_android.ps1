@@ -1,7 +1,7 @@
 # TellAviv — Android release build (PowerShell)
 # Usage:
 #   .\tools\build_android.ps1
-#   .\tools\build_android.ps1 -ApiUrl https://api.tellaviv.example.com -BuildAppBundle
+#   .\tools\build_android.ps1 -ApiUrl http://192.168.1.8:3000 -BuildAppBundle
 param(
   [string]$ApiUrl = $env:TELLAVIV_API_URL,
   [switch]$BuildAppBundle
@@ -10,8 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($ApiUrl)) {
-  # LAN IP for friends testing over Wi-Fi; override via -ApiUrl in production.
-  $ApiUrl = 'https://api.tellaviv.example.com'
+  # Production backend (Render). Override via -ApiUrl for LAN testing.
+  $ApiUrl = 'https://tellaviv-backend.onrender.com'
   Write-Host "No -ApiUrl given, using $ApiUrl" -ForegroundColor Yellow
 }
 

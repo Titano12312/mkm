@@ -48,12 +48,15 @@ flutter run --dart-define=API_URL=http://192.168.1.10:3000
 ### 3. Release builds
 
 ```powershell
-# Android APK
-flutter build apk --release --dart-define=API_URL=https://api.tellaviv.example.com
+# Android APK (default URL baked in: production backend on Render)
+flutter build apk --release --dart-define=API_URL=https://tellaviv-backend.onrender.com
 # Windows
-flutter build windows --release --dart-define=API_URL=https://api.tellaviv.example.com
+flutter build windows --release --dart-define=API_URL=https://tellaviv-backend.onrender.com
 # Inno Setup wizard (after Windows build)
 iscc installer\tellaviv.iss
 ```
+
+> The apps also accept a runtime server override (sidebar → Server URL),
+> so they can follow the backend without rebuilding.
 
 See `tools/` for scripted builds.
