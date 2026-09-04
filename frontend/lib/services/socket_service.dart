@@ -20,7 +20,13 @@ class SocketService extends ChangeNotifier {
   final String userId;
   String serverUrl;
 
+  /// Provides the current Supabase access token (wired by AuthGate).
+  /// Identity for server writes comes ONLY from this verified token.
+  final String? Function() tokenProvider;
+
   bool connected = false;
+  bool authed = false; // server confirmed our token via auth:ok
+  String? authError;
   List<Channel> textChannels = [];
   List<Channel> voiceChannels = [];
   Map<String, int> voiceCounts = {}; // voiceChannelId -> occupant count
@@ -28,12 +34,16 @@ class SocketService extends ChangeNotifier {
   String? activeTextChannelId;
   final Map<String, List<ChatMessage>> messagesByChannel = {};
 
+  /// Ephemeral typing state: channelId -> { userId: username }.
+  final Map<String, Map<String, String>> typingByChannel = {};
+
   String? activeVoiceChannelId;
   List<VoiceParticipant> voiceParticipants = [];
   String? selfSocketId;
 
-  SocketService({required this.username, required this.userId})
-      : serverUrl = const String.fromEnvironment(
+  SocketService({required this.username, required this.userId, String? Function()? tokenProvider})
+      : tokenProvider = tokenProvider ?? (() => null),
+        serverUrl = const String.fromEnvironment(
           'API_URL',
           defaultValue: 'http://localhost:3000',
         );
@@ -52,6 +62,10 @@ class SocketService extends ChangeNotifier {
     socket.onConnect((_) {
       connected = true;
       selfSocketId = socket.id;
+      // Auth first: every write (messages, voice seats) requires the server
+      // to verify this token. Identity comes from Supabase, never from us.
+      final token = tokenProvider();
+      if (token != null) socket.emit('auth:token', {'token': token});
       socket.emit('user:online', {'userId': userId, 'username': username});
       // Auto-join first text channel for instant context.
       if (activeTextChannelId != null) {
@@ -62,6 +76,23 @@ class SocketService extends ChangeNotifier {
 
     socket.onDisconnect((_) {
       connected = false;
+      authed = false;
+      notifyListeners();
+    });
+
+    socket.on('auth:ok', (_) {
+      authed = true;
+      authError = null;
+      notifyListeners();
+    });
+
+    socket.on('auth:error', (data) {
+      authed = false;
+      try {
+        authError = (Map<String, dynamic>.from(data as Map))['error'] as String?;
+      } catch (_) {
+        authError = 'auth failed';
+      }
       notifyListeners();
     });
 
@@ -119,7 +150,29 @@ class SocketService extends ChangeNotifier {
       }
     });
 
+    socket.on('typing:update', (data) {
+      final m = Map<String, dynamic>.from(data as Map);
+      final channelId = m['channelId'] as String;
+      final userId = (m['userId'] ?? '') as String;
+      final typing = (m['typing'] ?? false) as bool;
+      final bucket = typingByChannel.putIfAbsent(channelId, () => {});
+      if (typing) {
+        bucket[userId] = (m['username'] ?? 'Someone') as String;
+      } else {
+        bucket.remove(userId);
+      }
+      notifyListeners();
+    });
+
     socket.connect();
+  }
+
+  /// Re-send the current access token (call on Supabase token refresh).
+  void refreshAuth() {
+    final token = tokenProvider();
+    if (connected && token != null) {
+      _socket?.emit('auth:token', {'token': token});
+    }
   }
 
   void selectTextChannel(String channelId) {
@@ -134,23 +187,27 @@ class SocketService extends ChangeNotifier {
   void sendMessage(String content) {
     final text = content.trim();
     if (text.isEmpty || activeTextChannelId == null) return;
+    // No author fields: the server stamps identity from the verified token.
     _socket?.emit('message:send', {
       'channelId': activeTextChannelId,
-      'authorId': userId,
-      'authorName': username,
       'content': text,
     });
     // No optimistic insert: server echoes via message:receive (single path).
   }
 
+  /// Notify the channel that we're typing (ChatView debounces the stop).
+  void sendTyping(bool typing) {
+    if (activeTextChannelId == null) return;
+    _socket?.emit(typing ? 'typing:start' : 'typing:stop', {
+      'channelId': activeTextChannelId,
+    });
+  }
+
+  List<String> typingNames(String? channelId) =>
+      typingByChannel[channelId]?.values.toList() ?? const [];
+
   /// Raw socket access for VoiceService signaling — nothing else should use this.
   io.Socket? get rawSocket => _socket;
-
-  void setUsername(String name) {
-    username = name.trim().isEmpty ? username : name.trim().substring(0, 32);
-    if (connected) _socket?.emit('user:online', {'userId': userId, 'username': username});
-    notifyListeners();
-  }
 
   /// Point the app at a (new) backend and reconnect from scratch.
   /// Callers must leave any voice call first (sidebar does this) because

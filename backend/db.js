@@ -42,6 +42,30 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
 
 const isEnabled = () => supabase !== null;
 
+/**
+ * Verify a Supabase access token (sent by the Flutter app after Google login).
+ * Returns { userId, username } or null. Also refreshes the profile row, so
+ * `profiles` mirrors every user that ever authenticated — no separate
+ * signup endpoint needed (open registration = first login creates profile).
+ * In fallback mode (no env) there is no verifier → always null, and the
+ * server runs read-only (joins/history work, writes are rejected).
+ */
+async function verifyToken(token) {
+  if (!supabase || typeof token !== 'string' || !token) return null;
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data || !data.user) {
+    console.warn('[db] verifyToken rejected:', error ? error.message : 'no user');
+    return null;
+  }
+  const u = data.user;
+  const meta = u.user_metadata || {};
+  const username = String(
+    meta.full_name || meta.name || (u.email || '').split('@')[0] || 'Unknown',
+  ).slice(0, 32);
+  await upsertProfile({ userId: u.id, username });
+  return { userId: u.id, username };
+}
+
 function fromRow(r) {
   return {
     id: r.id,
@@ -154,4 +178,5 @@ module.exports = {
   upsertProfile,
   logVoiceJoin,
   logVoiceLeave,
+  verifyToken,
 };

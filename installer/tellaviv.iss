@@ -47,5 +47,13 @@ Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+; OAuth callback protocol (Supabase Google login): registers
+; com.tellaviv.app:// so the browser redirects back into the app.
+; HKCU = per-user, works with PrivilegesRequired=lowest.
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\com.tellaviv.app"; ValueType: string; ValueName: ""; ValueData: "TellAviv Login"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\com.tellaviv.app"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\com.tellaviv.app\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

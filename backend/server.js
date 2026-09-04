@@ -42,6 +42,7 @@ let VOICE_IDS = new Set(channels.voice.map((c) => c.id));
 const HISTORY_LIMIT = db.HISTORY_LIMIT;
 const messageHistory = new Map(); // channelId -> Array<message>
 const onlineUsers = new Map(); // socketId -> { userId, username }
+const authed = new Map(); // socketId -> { userId, username } verified via Supabase JWT
 const voiceRooms = new Map(); // voiceChannelId -> Map<socketId, { userId, username }>
 const socketVoiceChannel = new Map(); // socketId -> { channelId, ready: Promise<sessionId|null> }
 
@@ -116,14 +117,32 @@ io.on('connection', (socket) => {
     channels.voice.map((c) => ({ channelId: c.id, count: (voiceRooms.get(c.id) || new Map()).size })),
   );
 
+  // -- Auth ---------------------------------------------------------------
+  // Client sends the Supabase access token obtained at login (Google).
+  // Identity for ALL writes comes from this verified token — client-sent
+  // authorId/authorName fields are ignored, so impersonation is impossible.
+  socket.on('auth:token', async ({ token } = {}) => {
+    const identity = await db.verifyToken(token);
+    if (!identity) {
+      socket.emit('auth:error', { error: 'invalid-token' });
+      return;
+    }
+    authed.set(socket.id, identity);
+    onlineUsers.set(socket.id, identity);
+    io.emit('user:presence', { online: [...onlineUsers.values()] });
+    socket.emit('auth:ok', identity);
+  });
+
   // -- Presence -------------------------------------------------------------
+  // Pre-auth compat: shows the socket as online. No DB write here — profile
+  // rows are written only from verified identities (auth:token), so a client
+  // can never plant a spoofed profile.
   socket.on('user:online', ({ userId, username } = {}) => {
     if (!userId || !username) return;
+    if (authed.has(socket.id)) return; // verified identity wins, ignore spoof
     const clean = String(username).slice(0, 32);
     onlineUsers.set(socket.id, { userId, username: clean });
     io.emit('user:presence', { online: [...onlineUsers.values()] });
-    // Durable profile mirror (fire-and-forget: realtime never waits on DB).
-    db.upsertProfile({ userId, username: clean });
   });
 
   // -- Text channels ---------------------------------------------------------
@@ -142,17 +161,23 @@ io.on('connection', (socket) => {
     if (channelId) socket.leave(textRoom(channelId));
   });
 
-  socket.on('message:send', ({ channelId, authorId, authorName, content } = {}, ack) => {
+  socket.on('message:send', ({ channelId, content } = {}, ack) => {
+    const fail = (error) => {
+      if (typeof ack === 'function') ack({ ok: false, error });
+    };
+    // Writes require a verified identity — author fields are NEVER trusted
+    // from the client (prevents impersonation).
+    const identity = authed.get(socket.id);
+    if (!identity) return fail('auth-required');
     const text = typeof content === 'string' ? content.trim().slice(0, 2000) : '';
     if (!TEXT_IDS.has(channelId) || !text) {
-      if (typeof ack === 'function') ack({ ok: false, error: 'Invalid channel or empty message' });
-      return;
+      return fail('Invalid channel or empty message');
     }
     const msg = {
       id: `${Date.now()}-${socket.id.slice(0, 6)}`,
       channelId,
-      authorId: authorId || socket.id,
-      authorName: String(authorName || 'Unknown').slice(0, 32),
+      authorId: identity.userId,
+      authorName: identity.username,
       content: text,
       createdAt: new Date().toISOString(),
     };
@@ -169,12 +194,18 @@ io.on('connection', (socket) => {
   });
 
   // -- Voice channels (click-to-join / click-to-leave) ------------------------
-  socket.on('voice:join', async ({ channelId, userId, username } = {}) => {
+  socket.on('voice:join', async ({ channelId } = {}) => {
     if (!VOICE_IDS.has(channelId)) return;
+    // Voice seats require auth (sessions are logged under verified identity).
+    const identity = authed.get(socket.id);
+    if (!identity) {
+      socket.emit('voice:error', { error: 'auth-required' });
+      return;
+    }
     // Discord rule: one voice room at a time — leave previous first.
     if (socketVoiceChannel.get(socket.id)?.channelId !== channelId) await leaveVoice(io, socket);
 
-    const cleanUser = { userId: userId || socket.id, username: String(username || 'Unknown').slice(0, 32) };
+    const cleanUser = { userId: identity.userId, username: identity.username };
     socket.join(voiceRoom(channelId));
     if (!voiceRooms.has(channelId)) voiceRooms.set(channelId, new Map());
     voiceRooms.get(channelId).set(socket.id, cleanUser);
@@ -188,7 +219,7 @@ io.on('connection', (socket) => {
     // Tell existing peers a new peer arrived (they wait for its offer).
     socket.to(voiceRoom(channelId)).emit('voice:peer-joined', {
       channelId,
-      peer: { socketId: socket.id, userId: userId || socket.id, username: String(username || 'Unknown').slice(0, 32) },
+      peer: { socketId: socket.id, userId: cleanUser.userId, username: cleanUser.username },
     });
     broadcastVoiceUpdate(io, channelId);
   });
@@ -210,9 +241,25 @@ io.on('connection', (socket) => {
     io.to(targetSocketId).emit('webrtc:ice-candidate', { fromSocketId: socket.id, candidate });
   });
 
+  // -- Typing indicators (ephemeral: broadcast only, never persisted) --------
+  // Powers the "X is typing…" row. Authed-only so names can't be spoofed.
+  for (const [event, typing] of [['typing:start', true], ['typing:stop', false]]) {
+    socket.on(event, ({ channelId } = {}) => {
+      const identity = authed.get(socket.id);
+      if (!identity || !TEXT_IDS.has(channelId)) return;
+      socket.to(textRoom(channelId)).emit('typing:update', {
+        channelId,
+        userId: identity.userId,
+        username: identity.username,
+        typing,
+      });
+    });
+  }
+
   socket.on('disconnect', () => {
     console.log(`[-] disconnected ${socket.id}`);
     onlineUsers.delete(socket.id);
+    authed.delete(socket.id);
     io.emit('user:presence', { online: [...onlineUsers.values()] });
     leaveVoice(io, socket);
   });

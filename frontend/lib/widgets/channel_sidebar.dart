@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../core/motion.dart';
 import '../models/app_models.dart';
+import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../services/voice_service.dart';
 
@@ -21,7 +23,8 @@ class ChannelSidebar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // App header + username editor
+          // App header + identity (name comes from Google, not editable —
+          // the server stamps messages from the verified token anyway).
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -30,10 +33,10 @@ class ChannelSidebar extends StatelessWidget {
                 const Text('TellAviv',
                     style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                 const SizedBox(height: 8),
-                _UsernameField(initial: chat.username, onSubmit: chat.setUsername),
-                const SizedBox(height: 6),
-                // Server field recreates on URL change (ValueKey) so it never
-                // shows a stale address after reconnect.
+                Text(chat.username,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 4),
                 _ServerField(
                   key: ValueKey(chat.serverUrl),
                   initial: chat.serverUrl,
@@ -109,6 +112,15 @@ class ChannelSidebar extends StatelessWidget {
                     color: voice.muted ? Colors.redAccent : Colors.white70,
                     onPressed: voice.toggleMute,
                   ),
+                IconButton(
+                  tooltip: 'Sign out',
+                  icon: const Icon(Icons.logout, size: 18),
+                  color: Colors.white70,
+                  onPressed: () async {
+                    if (voice.inCall) await voice.leave();
+                    await AuthService.signOut();
+                  },
+                ),
               ],
             ),
           ),
@@ -137,9 +149,14 @@ class _TextRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-        child: Material(
-          color: selected ? const Color(0xFF404249) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
+        // Implicit selection fade (cheap: no controller, GPU-friendly).
+        child: AnimatedContainer(
+          duration: Motion.base,
+          curve: Motion.standard,
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFF404249) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
           child: InkWell(
             borderRadius: BorderRadius.circular(6),
             onTap: onTap,
@@ -163,9 +180,13 @@ class _VoiceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-        child: Material(
-          color: active ? const Color(0xFF404249) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
+        child: AnimatedContainer(
+          duration: Motion.base,
+          curve: Motion.standard,
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF404249) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
           child: InkWell(
             borderRadius: BorderRadius.circular(6),
             onTap: onTap,
@@ -193,39 +214,6 @@ class _VoiceRow extends StatelessWidget {
             ),
           ),
         ),
-      );
-}
-
-class _UsernameField extends StatefulWidget {
-  final String initial;
-  final ValueChanged<String> onSubmit;
-  const _UsernameField({required this.initial, required this.onSubmit});
-  @override
-  State<_UsernameField> createState() => _UsernameFieldState();
-}
-
-class _UsernameFieldState extends State<_UsernameField> {
-  late final TextEditingController _c;
-  @override
-  void initState() {
-    super.initState();
-    _c = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  Widget build(BuildContext context) => TextField(
-        controller: _c,
-        style: const TextStyle(color: Colors.white, fontSize: 13),
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: 'Username',
-          hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
-          filled: true,
-          fillColor: const Color(0xFF1E1F22),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        ),
-        onSubmitted: widget.onSubmit,
       );
 }
 

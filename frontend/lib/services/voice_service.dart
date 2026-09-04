@@ -106,11 +106,9 @@ class VoiceService extends ChangeNotifier {
     _localStream ??= await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
     _applyMute();
 
-    signaling.rawSocket?.emit('voice:join', {
-      'channelId': channelId,
-      'userId': signaling.userId,
-      'username': signaling.username,
-    });
+    // Server seats the socket by its verified auth identity — no user
+    // fields are sent (they'd be ignored anyway).
+    signaling.rawSocket?.emit('voice:join', {'channelId': channelId});
 
     // Offer to pre-existing peers; late joiners will offer to us in turn.
     // Small delay lets `voice:joined` populate participant list first.
