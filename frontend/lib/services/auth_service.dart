@@ -4,15 +4,20 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// AuthService — Supabase Auth (Google) session owner.
+/// AuthService — Supabase Auth session owner (Google + email/password).
 ///
-/// FLOW (identical on Android + Windows): the system browser opens Google
-/// via Supabase → redirect `com.tellaviv.app://login-callback` → the OS
-/// routes it back (Android intent-filter / Windows registry protocol) →
-/// app_links delivers the URI → session recovered. No passwords anywhere.
+/// GOOGLE FLOW (identical on Android + Windows): the system browser opens
+/// Google via Supabase → redirect `com.tellaviv.app://login-callback` → the
+/// OS routes it back (Android intent-filter / Windows registry protocol) →
+/// app_links delivers the URI → session recovered. Requires the Google
+/// provider enabled in the Supabase dashboard (with Google Cloud credentials).
 ///
-/// Open registration = first Google login auto-creates the `profiles` row
-/// server-side (see backend verifyToken). No invite codes, no admin step.
+/// EMAIL FLOW: plain sign-up/sign-in, no dashboard action needed (email
+/// provider is on by default). If "Confirm email" is ON in the dashboard,
+/// new accounts must click the inbox link before first sign-in.
+///
+/// Open registration = first login (either method) auto-creates the
+/// `profiles` row server-side (see backend verifyToken).
 class AuthService {
   AuthService._();
 
@@ -74,6 +79,57 @@ class AuthService {
       redirectTo: oauthRedirect,
       authScreenLaunchMode: LaunchMode.externalApplication,
     );
+  }
+
+  /// Email sign-up. Returns null on success, a friendly message otherwise.
+  /// Note: with "Confirm email" ON (dashboard default), the user must click
+  /// the inbox link before sign-in works — surfaced as email-not-confirmed.
+  static Future<String?> signUpWithEmail(String email, String password) async {
+    try {
+      final res = await client.auth.signUp(email: email.trim(), password: password);
+      // No session + identities empty = existing user re-registering; treat
+      // as sign-in hint, not success (avoids account-enumeration ambiguity).
+      if (res.session == null && (res.user?.identities?.isEmpty ?? true)) {
+        return 'Account already exists — sign in instead.';
+      }
+      return null;
+    } on AuthException catch (e) {
+      return _friendlyEmailError(e);
+    } catch (_) {
+      return 'Sign-up failed — check your connection and retry.';
+    }
+  }
+
+  /// Email sign-in. Returns null on success, a friendly message otherwise.
+  static Future<String?> signInWithEmail(String email, String password) async {
+    try {
+      await client.auth.signInWithPassword(email: email.trim(), password: password);
+      return null;
+    } on AuthException catch (e) {
+      return _friendlyEmailError(e);
+    } catch (_) {
+      return 'Sign-in failed — check your connection and retry.';
+    }
+  }
+
+  static String _friendlyEmailError(AuthException e) {
+    final code = e.code ?? '';
+    if (code == 'invalid_credentials' || code == 'invalid_login_credentials') {
+      return 'Wrong email or password.';
+    }
+    if (code == 'email_not_confirmed') {
+      return 'Check your inbox for the confirmation link, then sign in.';
+    }
+    if (code == 'user_already_exists' || code.contains('already')) {
+      return 'Account already exists — sign in instead.';
+    }
+    if (code == 'weak_password') {
+      return 'Password too weak — use at least 6 characters.';
+    }
+    if (code == 'validation_failed') {
+      return 'Enter a valid email address.';
+    }
+    return 'Authentication failed — please retry.';
   }
 
   static Future<void> signOut() => client.auth.signOut();
