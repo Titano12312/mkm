@@ -1,0 +1,28 @@
+# TellAviv — mono-repo root
+node_modules/
+.dart_tool/
+build/
+.frontend/
+*.log
+
+# Backend
+backend/node_modules/
+backend/.env
+
+# Flutter
+frontend/build/
+frontend/.dart_tool/
+frontend/.idea/
+frontend/*.iml
+frontend/.flutter-plugins*
+
+# Windows / Android artifacts
+*.apk
+*.aab
+Output/
+*.exe
+*.iss.bak
+
+# OS
+.DS_Store
+Thumbs.db

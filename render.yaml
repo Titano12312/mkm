@@ -1,0 +1,21 @@
+# TellAviv — Render Blueprint (infra-as-code).
+# Deploy: dashboard → New → Blueprint → select the repo containing this file.
+# Secrets (SUPABASE_*) are set manually in the dashboard (sync: false);
+# never commit them — backend/.env is gitignored.
+services:
+  - type: web
+    name: tellaviv-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    plan: free
+    numInstances: 1 # presence/voice occupancy live in memory: keep 1 instance
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: CLIENT_ORIGIN
+        value: "*"

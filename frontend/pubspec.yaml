@@ -1,0 +1,23 @@
+name: tellaviv
+description: TellAviv — private Discord-like messenger (Windows + Android).
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  socket_io_client: ^2.0.3
+  flutter_webrtc: ^1.6.1
+  provider: ^6.1.2
+  uuid: ^4.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
