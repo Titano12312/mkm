@@ -5,6 +5,7 @@ import '../models/app_models.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../services/voice_service.dart';
+import 'social_dialogs.dart';
 
 /// Left channel sidebar (desktop) / drawer content (mobile).
 /// Sections: TEXT CHANNELS (#) and VOICE CHANNELS (🔊 + occupant badge).
@@ -76,38 +77,45 @@ class ChannelSidebar extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
-                _SectionLabel('TEXT CHANNELS'),
-                for (final c in chat.textChannels)
-                  _TextRow(
-                    channel: c,
-                    selected: c.id == chat.activeTextChannelId,
-                    onTap: () {
-                      chat.selectTextChannel(c.id);
-                      onNavigate?.call();
-                    },
-                  ),
-                const SizedBox(height: 12),
-                _SectionLabel('VOICE CHANNELS'),
-                for (final c in chat.voiceChannels)
-                  _VoiceRow(
-                    channel: c,
-                    count: chat.voiceCounts[c.id] ?? 0,
-                    active: c.id == chat.activeVoiceChannelId,
-                    onTap: () async {
-                      if (chat.activeVoiceChannelId == c.id) {
-                        await voice.leave();
-                      } else {
-                        if (voice.inCall) await voice.leave();
-                        await voice.join(c.id);
-                      }
-                      onNavigate?.call();
-                    },
-                  ),
+                // Server channels only render when seeded — home is
+                // friends/DMs/groups, so empty sections stay hidden.
+                if (chat.textChannels.isNotEmpty) ...[
+                  _SectionLabel('TEXT CHANNELS'),
+                  for (final c in chat.textChannels)
+                    _TextRow(
+                      channel: c,
+                      selected: c.id == chat.activeTextChannelId,
+                      onTap: () {
+                        chat.selectTextChannel(c.id);
+                        onNavigate?.call();
+                      },
+                    ),
+                  const SizedBox(height: 12),
+                ],
+                if (chat.voiceChannels.isNotEmpty) ...[
+                  _SectionLabel('VOICE CHANNELS'),
+                  for (final c in chat.voiceChannels)
+                    _VoiceRow(
+                      channel: c,
+                      count: chat.voiceCounts[c.id] ?? 0,
+                      active: c.id == chat.activeVoiceChannelId,
+                      onTap: () async {
+                        if (chat.activeVoiceChannelId == c.id) {
+                          await voice.leave();
+                        } else {
+                          if (voice.inCall) await voice.leave();
+                          await voice.join(c.id);
+                        }
+                        onNavigate?.call();
+                      },
+                    ),
+                  const SizedBox(height: 12),
+                ],
                 const SizedBox(height: 12),
                 // -- Friends: tap a friend to open the 1:1 private chat. -----
                 _SectionHeader(
                   'FRIENDS',
-                  onAdd: () => _showAddFriend(context),
+                  onAdd: () => showAddFriendDialog(context),
                   count: chat.pendingIn.length,
                 ),
                 for (final r in chat.pendingIn)
@@ -146,10 +154,30 @@ class ChannelSidebar extends StatelessWidget {
                         style: const TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
                 const SizedBox(height: 12),
+                _SectionLabel('DIRECT MESSAGES'),
+                for (final d in chat.conversations.where((c) => c.kind == 'dm'))
+                  _FriendRow(
+                    name: d.title(chat.userId),
+                    online: chat.friends.any(
+                        (f) => f.online && d.members.any((m) => m.userId == f.userId)),
+                    selected: d.id == chat.activeConversationId,
+                    onTap: () {
+                      chat.openConversation(d.id);
+                      onNavigate?.call();
+                    },
+                  ),
+                if (chat.friends.isNotEmpty &&
+                    !chat.conversations.any((c) => c.kind == 'dm'))
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 2, 16, 4),
+                    child: Text('Tap a friend above to start chatting.',
+                        style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  ),
+                const SizedBox(height: 12),
                 // -- Groups: opt-in only, never automatic. --------------------
                 _SectionHeader(
                   'GROUPS',
-                  onAdd: () => _showCreateGroup(context),
+                  onAdd: () => showCreateGroupDialog(context),
                 ),
                 for (final g in chat.conversations.where((c) => c.kind == 'group'))
                   _GroupRow(
@@ -489,191 +517,6 @@ class _GroupRow extends StatelessWidget {
           ),
         ),
       );
-}
-
-/// Add-friend dialog: invite by the exact email they signed up with.
-Future<void> _showAddFriend(BuildContext context) async {
-  final email = TextEditingController();
-  String? error;
-  bool busy = false;
-  final chat = context.read<SocketService>();
-
-  Future<void> doSend(StateSetter setState, BuildContext ctx) async {
-    if (busy || email.text.trim().isEmpty) return;
-    setState(() {
-      busy = true;
-      error = null;
-    });
-    final err = await chat.sendFriendRequest(email.text);
-    if (!ctx.mounted) return;
-    if (err == null) {
-      Navigator.of(ctx).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invite sent.')),
-      );
-    } else {
-      setState(() {
-        busy = false;
-        error = err;
-      });
-    }
-  }
-
-  await showDialog(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) => AlertDialog(
-        backgroundColor: const Color(0xFF2B2D31),
-        title: const Text('Add friend', style: TextStyle(color: Colors.white, fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Their signup email:', style: TextStyle(color: Colors.grey, fontSize: 12)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: email,
-              keyboardType: TextInputType.emailAddress,
-              autocorrect: false,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'friend@example.com',
-                hintStyle: const TextStyle(color: Colors.grey),
-                filled: true,
-                fillColor: const Color(0xFF1E1F22),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-              ),
-              onSubmitted: (_) => doSend(setState, ctx),
-            ),
-            if (error != null) ...[
-              const SizedBox(height: 8),
-              Text(_friendErrorText(error!),
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-          TextButton(
-            onPressed: busy ? null : () => doSend(setState, ctx),
-            child: const Text('Send invite'),
-          ),
-        ],
-      ),
-    ),
-  );
-  email.dispose();
-}
-
-String _friendErrorText(String code) {
-  switch (code) {
-    case 'not-found':
-      return 'No account with that email yet.';
-    case 'self':
-      return 'That is your own email.';
-    case 'already-friends':
-      return 'You are already friends.';
-    case 'already-pending':
-      return 'Invite already pending.';
-    case 'offline':
-      return 'Not connected — retry in a moment.';
-    default:
-      return 'Could not send invite ($code).';
-  }
-}
-
-/// Create-group dialog: name + pick from friends (groups are opt-in only).
-Future<void> _showCreateGroup(BuildContext context) async {
-  final chat = context.read<SocketService>();
-  if (chat.friends.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Add friends first, then create a group.')),
-    );
-    return;
-  }
-  final name = TextEditingController();
-  final selected = <String>{};
-  bool busy = false;
-  await showDialog(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) => AlertDialog(
-        backgroundColor: const Color(0xFF2B2D31),
-        title: const Text('New group', style: TextStyle(color: Colors.white, fontSize: 16)),
-        content: SizedBox(
-          width: 320,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: name,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: 'Group name',
-                  hintStyle: const TextStyle(color: Colors.grey),
-                  filled: true,
-                  fillColor: const Color(0xFF1E1F22),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text('Invite friends:', style: TextStyle(color: Colors.grey, fontSize: 12)),
-              const SizedBox(height: 4),
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    for (final f in chat.friends)
-                      CheckboxListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(f.username,
-                            style: const TextStyle(color: Colors.white, fontSize: 13)),
-                        value: selected.contains(f.userId),
-                        onChanged: (v) => setState(() {
-                          if (v == true) {
-                            selected.add(f.userId);
-                          } else {
-                            selected.remove(f.userId);
-                          }
-                        }),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-          TextButton(
-            onPressed: busy || selected.isEmpty
-                ? null
-                : () async {
-                    setState(() => busy = true);
-                    final id = await ctx
-                        .read<SocketService>()
-                        .createGroup(name.text, selected.toList());
-                    if (!ctx.mounted) return;
-                    Navigator.of(ctx).pop();
-                    if (id != null) {
-                      context.read<SocketService>().openConversation(id);
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Could not create group.')),
-                      );
-                    }
-                  },
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    ),
-  );
-  name.dispose();
 }
 
 /// Discord blurple — kept as a const to avoid extra theme packages.

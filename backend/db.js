@@ -19,15 +19,11 @@
 const HISTORY_LIMIT = 100;
 
 const FALLBACK_CHANNELS = {
-  text: [
-    { id: 'general', name: 'general' },
-    { id: 'random', name: 'random' },
-    { id: 'gaming', name: 'gaming' },
-  ],
-  voice: [
-    { id: 'lounge', name: 'Lounge' },
-    { id: 'gaming-voice', name: 'Gaming' },
-  ],
+  // Intentionally empty: TellAviv is friends-first — server channels only
+  // exist if explicitly seeded in Supabase. The app treats friends/DMs/
+  // user-created groups as home and hides empty channel sections.
+  text: [],
+  voice: [],
 };
 
 let supabase = null;

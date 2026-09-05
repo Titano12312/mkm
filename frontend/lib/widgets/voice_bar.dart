@@ -97,8 +97,8 @@ String _friendlyVoiceError(String code) {
   switch (code) {
     case 'auth-required':
       return 'Login expired — tap to reconnect, then rejoin voice.';
-    case 'Mic unavailable':
-      return code;
+    case 'unknown-channel':
+      return 'That voice room no longer exists.';
     default:
       return code;
   }

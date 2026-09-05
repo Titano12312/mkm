@@ -10,6 +10,7 @@ import 'services/voice_service.dart';
 import 'screens/login_screen.dart';
 import 'widgets/channel_sidebar.dart';
 import 'widgets/chat_view.dart';
+import 'widgets/home_empty.dart';
 import 'widgets/voice_bar.dart';
 
 /// Breakpoint: ≥800 logical px = desktop (persistent sidebar),
@@ -147,7 +148,7 @@ class HomeShell extends StatelessWidget {
   }
 }
 
-/// Desktop: persistent sidebar | chat column (messages + voice bar + input).
+/// Desktop: persistent sidebar | main pane (chat or empty home) + voice bar.
 class DesktopLayout extends StatelessWidget {
   const DesktopLayout({super.key});
 
@@ -161,7 +162,7 @@ class DesktopLayout extends StatelessWidget {
           Expanded(
             child: Column(
               children: [
-                Expanded(child: ChatView()),
+                Expanded(child: _MainPane()),
                 VoiceBar(), // collapses to zero height when not in call
               ],
             ),
@@ -172,7 +173,21 @@ class DesktopLayout extends StatelessWidget {
   }
 }
 
-/// Mobile: drawer for channels, chat fills screen, voice bar stays visible.
+/// Main pane: conversation/channel view, or the empty home when nothing
+/// is open (the normal state in a friends-first app with no seed channels).
+class _MainPane extends StatelessWidget {
+  const _MainPane();
+
+  @override
+  Widget build(BuildContext context) {
+    final chat = context.watch<SocketService>();
+    final hasView =
+        chat.activeConversationId != null || chat.activeTextChannelId != null;
+    return hasView ? const ChatView() : const HomeEmpty();
+  }
+}
+
+/// Mobile: drawer for channels, main pane fills screen, voice bar visible.
 class MobileLayout extends StatelessWidget {
   const MobileLayout({super.key});
 
@@ -181,7 +196,10 @@ class MobileLayout extends StatelessWidget {
     final chat = context.watch<SocketService>();
     return Scaffold(
       appBar: AppBar(
-        title: Text('# ${chat.activeTextChannelId ?? '…'}'),
+        title: Text(
+          chat.conversationById(chat.activeConversationId)?.title(chat.userId) ??
+              (chat.activeTextChannelId != null ? '# ${chat.activeTextChannelId}' : 'TellAviv'),
+        ),
         actions: [
           IconButton(
             tooltip: 'Mute / unmute',
@@ -198,7 +216,7 @@ class MobileLayout extends StatelessWidget {
       ),
       body: const Column(
         children: [
-          Expanded(child: ChatView()),
+          Expanded(child: _MainPane()),
           VoiceBar(),
         ],
       ),

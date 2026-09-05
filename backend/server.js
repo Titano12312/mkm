@@ -357,7 +357,10 @@ io.on('connection', (socket) => {
 
   // -- Voice channels (click-to-join / click-to-leave) ------------------------
   socket.on('voice:join', async ({ channelId } = {}) => {
-    if (!VOICE_IDS.has(channelId)) return;
+    if (!VOICE_IDS.has(channelId)) {
+      socket.emit('voice:error', { error: 'unknown-channel' });
+      return;
+    }
     // Voice seats require auth (sessions are logged under verified identity).
     const identity = authed.get(socket.id);
     if (!identity) {
