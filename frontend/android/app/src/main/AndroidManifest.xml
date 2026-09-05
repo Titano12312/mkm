@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <application
-        android:label="tellaviv"
+        android:label="TellAviv"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

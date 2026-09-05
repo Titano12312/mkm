@@ -23,6 +23,9 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=Output
 OutputBaseFilename=TellAviv-Setup-{#MyAppVersion}
+; Wizard + uninstall entry use the project logo.
+SetupIconFile=tellaviv.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -44,8 +47,8 @@ Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\{#MyAppExeName}"
 
 ; OAuth callback protocol (Supabase Google login): registers
 ; com.tellaviv.app:// so the browser redirects back into the app.

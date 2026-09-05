@@ -13,16 +13,14 @@ class HomeEmpty extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final reduce = Motion.reduce(context);
-    final mark = Container(
-      width: 72,
-      height: 72,
-      decoration: BoxDecoration(
-        color: const Color(0xFF5865F2),
-        borderRadius: BorderRadius.circular(22),
+    final mark = ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: Image.asset(
+        'assets/logo.png',
+        width: 72,
+        height: 72,
+        fit: BoxFit.cover,
       ),
-      alignment: Alignment.center,
-      child: const Text('T',
-          style: TextStyle(color: Colors.white, fontSize: 38, fontWeight: FontWeight.bold)),
     );
     return Container(
       color: const Color(0xFF313338),

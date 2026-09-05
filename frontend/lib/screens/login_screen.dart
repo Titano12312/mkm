@@ -68,16 +68,14 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final reduce = Motion.reduce(context);
-    final logo = Container(
-      width: 84,
-      height: 84,
-      decoration: BoxDecoration(
-        color: const Color(0xFF5865F2),
-        borderRadius: BorderRadius.circular(24),
+    final logo = ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Image.asset(
+        'assets/logo.png',
+        width: 84,
+        height: 84,
+        fit: BoxFit.cover,
       ),
-      alignment: Alignment.center,
-      child: const Text('T',
-          style: TextStyle(color: Colors.white, fontSize: 44, fontWeight: FontWeight.bold)),
     );
     return Scaffold(
       backgroundColor: const Color(0xFF1E1F22),
