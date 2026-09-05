@@ -113,7 +113,7 @@ class AuthService {
   }
 
   static String _friendlyEmailError(AuthException e) {
-    final code = e.code ?? '';
+    final code = (e.code ?? '').toLowerCase();
     if (code == 'invalid_credentials' || code == 'invalid_login_credentials') {
       return 'Wrong email or password.';
     }
@@ -129,7 +129,19 @@ class AuthService {
     if (code == 'validation_failed') {
       return 'Enter a valid email address.';
     }
-    return 'Authentication failed — please retry.';
+    if (code == 'signup_disabled') {
+      return 'Registrations are disabled — ask the admin to enable them.';
+    }
+    if (code.contains('rate_limit') ||
+        code.contains('too_many') ||
+        code == 'over_request_rate_limit' ||
+        e.message.contains('after ') && e.message.contains('seconds')) {
+      // Supabase throttles repeated signup attempts (observed: "you can only
+      // request this after N seconds"). Back off instead of retrying fast.
+      return 'Too many attempts — wait a minute, then try signing in.';
+    }
+    // Include the raw code so bug reports are actionable instead of generic.
+    return 'Authentication failed ($code) — please retry.';
   }
 
   static Future<void> signOut() => client.auth.signOut();
