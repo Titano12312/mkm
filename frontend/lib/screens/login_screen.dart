@@ -95,10 +95,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       : logo
                           .animate()
                           .scale(
-                            begin: const Offset(0.3, 0.3),
+                            // Confident arrival from an already-visible
+                            // default — never elastic on a form surface.
+                            // Operate mode: don't make sign-in wait.
+                            begin: const Offset(0.85, 0.85),
                             end: const Offset(1, 1),
-                            duration: Motion.playful,
-                            curve: Motion.spring,
+                            duration: Motion.enter,
+                            curve: Motion.standard,
                           )
                           .fadeIn(duration: Motion.fast),
                   const SizedBox(height: 24),
@@ -288,6 +291,7 @@ class _DarkField extends StatelessWidget {
 }
 
 /// Staggered rise used by the login entrance (skipped under reduced motion).
+/// Total delay capped at ~400ms so sign-in never waits on choreography.
 class _Stagger extends StatelessWidget {
   final int delay;
   final bool reduce;
@@ -297,12 +301,13 @@ class _Stagger extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (reduce) return child;
-    return child.animate().fadeIn(duration: Motion.fast, delay: Duration(milliseconds: 120 * delay)).slideY(
-          begin: 0.4,
+    final step = Duration(milliseconds: 80 * delay);
+    return child.animate().fadeIn(duration: Motion.fast, delay: step).slideY(
+          begin: 0.25,
           end: 0,
           duration: Motion.enter,
-          delay: Duration(milliseconds: 120 * delay),
-          curve: Motion.entrance,
+          delay: step,
+          curve: Motion.standard,
         );
   }
 }

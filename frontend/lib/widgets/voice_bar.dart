@@ -20,6 +20,7 @@ class VoiceBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final chat = context.watch<SocketService>();
     final voice = context.watch<VoiceService>();
+    final reduce = Motion.reduce(context);
 
     // Error row (mic denied, server silent…): visible even outside a call,
     // tap to reconnect and retry. Never a dead end without explanation.
@@ -43,7 +44,6 @@ class VoiceBar extends StatelessWidget {
     if (!voice.inCall || chat.activeVoiceChannelId == null) {
       return const SizedBox.shrink();
     }
-    final reduce = Motion.reduce(context);
     final bar = Container(
       color: const Color(0xFF1E1F22),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -75,11 +75,12 @@ class VoiceBar extends StatelessWidget {
             color: voice.muted ? Colors.redAccent : Colors.white,
             onPressed: voice.toggleMute,
           ).animate().scale(
-                // Pop replayed per toggle via the key above.
-                begin: const Offset(1.3, 1.3),
+                // Subtle pop replayed per toggle via the key above.
+                // Standard ease, never spring.
+                begin: const Offset(1.15, 1.15),
                 end: const Offset(1, 1),
                 duration: Motion.fast,
-                curve: Motion.spring,
+                curve: Motion.feedback,
               ),
           IconButton(
             tooltip: 'Leave voice',
@@ -91,7 +92,9 @@ class VoiceBar extends StatelessWidget {
       ),
     );
     if (reduce) return bar;
-    // Join entrance, played on first build (inCall false→true swaps the tree).
+    // Join entrance, played on first build (inCall false→true swaps the
+    // tree). Leave is an instant cut — intentionally faster than entrance
+    // so hanging up never waits on choreography (Operate mode).
     return bar
         .animate()
         .slideY(begin: 1, end: 0, duration: Motion.base, curve: Motion.standard)

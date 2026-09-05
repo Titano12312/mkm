@@ -53,10 +53,13 @@ class HomeEmpty extends StatelessWidget {
                   : mark
                       .animate()
                       .scale(
-                        begin: const Offset(0.6, 0.6),
+                        // Same confident arrival as login — the brand mark
+                        // earns one quiet entrance, never elastic here.
+                        // Spring is reserved for call presence only.
+                        begin: const Offset(0.85, 0.85),
                         end: const Offset(1, 1),
-                        duration: Motion.playful,
-                        curve: Motion.spring,
+                        duration: Motion.enter,
+                        curve: Motion.standard,
                       )
                       .fadeIn(duration: Motion.fast),
               const SizedBox(height: 20),

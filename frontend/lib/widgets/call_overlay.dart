@@ -33,8 +33,9 @@ class CallOverlayHost extends StatelessWidget {
     final chat = context.watch<SocketService>();
     final peerName = call.peerUsername ?? 'Friend';
     final avatarUrl = call.peerUserId != null ? chat.avatarFor(call.peerUserId!) : null;
+    final reduce = Motion.reduce(context);
 
-    return Material(
+    final overlay = Material(
       color: const Color(0xF21E1F22),
       child: SafeArea(
         child: Padding(
@@ -62,6 +63,21 @@ class CallOverlayHost extends StatelessWidget {
         ),
       ),
     );
+
+    // Continuity: full-screen takeover fades in (fast), exits faster.
+    // Reduced motion: fade only, no scale — feedback stays legible.
+    if (reduce) {
+      return overlay.animate().fadeIn(duration: Motion.fastExit);
+    }
+    return overlay
+        .animate()
+        .fadeIn(duration: Motion.fast)
+        .scale(
+          begin: const Offset(0.96, 0.96),
+          end: const Offset(1, 1),
+          duration: Motion.base,
+          curve: Motion.standard,
+        );
   }
 }
 

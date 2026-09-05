@@ -32,8 +32,12 @@ class _ChatViewState extends State<ChatView> {
   Timer? _typingTimer;
   int _sentCount = 0;
 
-  void _scrollToBottom() {
+  void _scrollToBottom(bool reduceMotion) {
     if (!_scroll.hasClients) return;
+    if (reduceMotion) {
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      return;
+    }
     _scroll.animateTo(_scroll.position.maxScrollExtent,
         duration: Motion.fast, curve: Motion.standard);
   }
@@ -110,7 +114,10 @@ class _ChatViewState extends State<ChatView> {
     }
 
     // Auto-scroll on new message (post-frame to wait for layout).
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    // Reduced motion: jump, never animate the scroll offset.
+    final reduceMotion = Motion.reduce(context);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _scrollToBottom(reduceMotion));
 
     return Column(
       children: [
@@ -208,15 +215,18 @@ class _ChatViewState extends State<ChatView> {
                         mine: mine,
                         compact: grouped,
                       );
-                      if (!isNew) return row;
-                      // Entrance, played exactly once per message. Sides match
-                      // the conversation direction (mine right, theirs left).
+                      if (!isNew || reduceMotion) return row;
+                      // Entrance, played exactly once per message. Horizontal
+                      // direction matches conversation side (mine right,
+                      // theirs left) — the relationship cue. No vertical rise:
+                      // generic fade-and-rise is animation debt. Transform +
+                      // opacity only (Windows + Android list budget).
                       return RepaintBoundary(
                         child: row
                             .animate()
                             .fadeIn(duration: Motion.fast)
                             .slide(
-                              begin: Offset(mine ? 0.25 : -0.25, 0.2),
+                              begin: Offset(mine ? 0.2 : -0.2, 0),
                               end: Offset.zero,
                               duration: Motion.base,
                               curve: Motion.standard,
@@ -267,18 +277,27 @@ class _ChatViewState extends State<ChatView> {
               fillColor: const Color(0xFF383A40),
               border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-              suffixIcon: IconButton(
-                key: ValueKey('send-$_sentCount'),
-                icon: const Icon(Icons.send, size: 20),
-                color: Colors.grey[400],
-                onPressed: _send,
-              ).animate().scale(
-                    // Bounce replayed per send via the key above.
-                    begin: const Offset(1.35, 1.35),
-                    end: const Offset(1, 1),
-                    duration: Motion.fast,
-                    curve: Motion.spring,
-                  ),
+              suffixIcon: reduceMotion
+                  ? IconButton(
+                      key: ValueKey('send-$_sentCount'),
+                      icon: const Icon(Icons.send, size: 20),
+                      color: Colors.grey[400],
+                      onPressed: _send,
+                    )
+                  : IconButton(
+                      key: ValueKey('send-$_sentCount'),
+                      icon: const Icon(Icons.send, size: 20),
+                      color: Colors.grey[400],
+                      onPressed: _send,
+                    ).animate().scale(
+                      // Subtle pop replayed per send via the key above.
+                      // Standard ease, never spring: long feedback feels
+                      // like latency. Static under reduced motion.
+                      begin: const Offset(1.15, 1.15),
+                      end: const Offset(1, 1),
+                      duration: Motion.fast,
+                      curve: Motion.feedback,
+                    ),
             ),
             onChanged: _onInputChanged,
             onSubmitted: (_) => _send(),
@@ -479,22 +498,25 @@ class _TypingDots extends StatelessWidget {
     if (Motion.reduce(context)) {
       return const Text('…', style: TextStyle(color: Colors.grey, fontSize: 14));
     }
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < 3; i++)
-          Padding(
-            padding: const EdgeInsets.only(right: 2),
-            child: Container(
-              width: 6,
-              height: 6,
-              decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle),
-            )
-                .animate(onPlay: (c) => c.repeat(reverse: true))
-                .fadeIn(duration: const Duration(milliseconds: 400), delay: Duration(milliseconds: 150 * i))
-                .fadeOut(duration: const Duration(milliseconds: 400)),
-          ),
-      ],
+    // Isolated so the infinite loop never repaints the message list.
+    return RepaintBoundary(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < 3; i++)
+            Padding(
+              padding: const EdgeInsets.only(right: 2),
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle),
+              )
+                  .animate(onPlay: (c) => c.repeat(reverse: true))
+                  .fadeIn(duration: const Duration(milliseconds: 400), delay: Duration(milliseconds: 150 * i))
+                  .fadeOut(duration: const Duration(milliseconds: 400)),
+            ),
+        ],
+      ),
     );
   }
 }

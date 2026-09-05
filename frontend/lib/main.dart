@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'core/motion.dart';
 import 'services/auth_service.dart';
 import 'services/call_service.dart';
 import 'services/socket_service.dart';
@@ -189,6 +190,9 @@ class DesktopLayout extends StatelessWidget {
 
 /// Main pane: conversation/channel view, or the empty home when nothing
 /// is open (the normal state in a friends-first app with no seed channels).
+/// Motion: cross-fade on switch so navigation preserves continuity instead
+/// of a hard cut. Fade only (no slide) — Operate mode keeps routine
+/// transitions fast; reduced motion shortens to a near-instant cut.
 class _MainPane extends StatelessWidget {
   const _MainPane();
 
@@ -197,7 +201,16 @@ class _MainPane extends StatelessWidget {
     final chat = context.watch<SocketService>();
     final hasView =
         chat.activeConversationId != null || chat.activeTextChannelId != null;
-    return hasView ? const ChatView() : const HomeEmpty();
+    final reduce = Motion.reduce(context);
+    return AnimatedSwitcher(
+      duration: reduce ? Motion.fastExit : Motion.fast,
+      reverseDuration: Motion.fastExit,
+      switchInCurve: Motion.standard,
+      switchOutCurve: Motion.standard,
+      child: hasView
+          ? const ChatView(key: ValueKey('pane-chat'))
+          : const HomeEmpty(key: ValueKey('pane-home')),
+    );
   }
 }
 
