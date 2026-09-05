@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/app_models.dart';
@@ -40,6 +42,15 @@ class SocketService extends ChangeNotifier {
   String? activeVoiceChannelId;
   List<VoiceParticipant> voiceParticipants = [];
   String? selfSocketId;
+  String? voiceError;
+
+  // -- Social: friends, DMs, opt-in groups ------------------------------------
+  List<SocialUser> friends = [];
+  List<SocialUser> pendingIn = [];
+  List<SocialUser> pendingOut = [];
+  List<Conversation> conversations = [];
+  String? activeConversationId;
+  final Map<String, List<DmMessage>> dmMessagesByConv = {};
 
   SocketService({required this.username, required this.userId, String? Function()? tokenProvider})
       : tokenProvider = tokenProvider ?? (() => null),
@@ -55,7 +66,15 @@ class SocketService extends ChangeNotifier {
     if (_socket != null) return;
     final socket = io.io(
       serverUrl,
-      io.OptionBuilder().setTransports(['websocket']).enableAutoConnect().build(),
+      // Generous timeouts: Render free tier cold-starts can take 30s+.
+      // Socket.io auto-reconnects with backoff after that.
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .setTimeout(20000)
+          .setReconnectionDelay(2000)
+          .setReconnectionDelayMax(15000)
+          .enableAutoConnect()
+          .build(),
     );
     _socket = socket;
 
@@ -84,6 +103,8 @@ class SocketService extends ChangeNotifier {
       authed = true;
       authError = null;
       notifyListeners();
+      // Pull social state on every (re-)auth: friends, requests, DMs.
+      refreshSocial();
     });
 
     socket.on('auth:error', (data) {
@@ -150,12 +171,45 @@ class SocketService extends ChangeNotifier {
       }
     });
 
+    socket.on('voice:error', (data) {
+      try {
+        voiceError = (Map<String, dynamic>.from(data as Map))['error'] as String?;
+      } catch (_) {
+        voiceError = 'voice failed';
+      }
+      notifyListeners();
+    });
+
+    socket.on('social:refresh', (_) => refreshSocial());
+
+    socket.on('dm:receive', (data) {
+      final msg = DmMessage.fromJson(Map<String, dynamic>.from(data as Map));
+      final list = dmMessagesByConv.putIfAbsent(msg.conversationId, () => []);
+      if (list.any((m) => m.id == msg.id)) return; // idempotent on reconnect
+      list.add(msg);
+      notifyListeners();
+    });
+
+    socket.on('dm:history', (data) {
+      final m = Map<String, dynamic>.from(data as Map);
+      final id = m['conversationId'] as String;
+      dmMessagesByConv[id] = (m['messages'] as List)
+          .map((e) => DmMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      notifyListeners();
+    });
+
+    socket.on('conv:update', (_) => refreshSocial());
+
     socket.on('typing:update', (data) {
       final m = Map<String, dynamic>.from(data as Map);
-      final channelId = m['channelId'] as String;
+      // Channels and conversations share the bucket map (ids never collide:
+      // slugs vs UUIDs). ChatView/DmView read their own key only.
+      final key = (m['conversationId'] ?? m['channelId']) as String?;
+      if (key == null) return;
       final userId = (m['userId'] ?? '') as String;
       final typing = (m['typing'] ?? false) as bool;
-      final bucket = typingByChannel.putIfAbsent(channelId, () => {});
+      final bucket = typingByChannel.putIfAbsent(key, () => {});
       if (typing) {
         bucket[userId] = (m['username'] ?? 'Someone') as String;
       } else {
@@ -176,7 +230,11 @@ class SocketService extends ChangeNotifier {
   }
 
   void selectTextChannel(String channelId) {
-    if (activeTextChannelId == channelId) return;
+    activeConversationId = null; // channel mode and conversation mode exclude each other
+    if (activeTextChannelId == channelId) {
+      notifyListeners();
+      return;
+    }
     final prev = activeTextChannelId;
     activeTextChannelId = channelId;
     if (prev != null) _socket?.emit('channel:leave', {'channelId': prev});
@@ -184,27 +242,200 @@ class SocketService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void sendMessage(String content) {
+  /// Emit with server ack, guarded by a timeout so UI never hangs on a
+  /// dead socket (e.g. Render cold start). Returns the ack map or null.
+  Future<Map<String, dynamic>?> _emitAck(String event, Map<String, dynamic> data) {
+    final socket = _socket;
+    if (socket == null || !connected) return Future.value(null);
+    final completer = Completer<Map<String, dynamic>?>();
+    socket.emitWithAck(event, data, ack: (dynamic res) {
+      if (completer.isCompleted) return;
+      try {
+        completer.complete(res == null ? null : Map<String, dynamic>.from(res as Map));
+      } catch (_) {
+        completer.complete(null);
+      }
+    });
+    Future<void>.delayed(const Duration(seconds: 12), () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+    return completer.future;
+  }
+
+  /// Send a channel message. Returns true on server ack. On auth-required,
+  /// refreshes the token once and retries (covers expired-JWT races);
+  /// the caller surfaces a SnackBar when it still fails — sends are never
+  /// silently dropped anymore.
+  Future<bool> sendMessage(String content) {
     final text = content.trim();
-    if (text.isEmpty || activeTextChannelId == null) return;
+    if (text.isEmpty || activeTextChannelId == null) return Future.value(false);
     // No author fields: the server stamps identity from the verified token.
-    _socket?.emit('message:send', {
-      'channelId': activeTextChannelId,
-      'content': text,
-    });
-    // No optimistic insert: server echoes via message:receive (single path).
+    return _sendWithAuthRetry(
+      () => _emitAck('message:send', {'channelId': activeTextChannelId, 'content': text}),
+    );
   }
 
-  /// Notify the channel that we're typing (ChatView debounces the stop).
-  void sendTyping(bool typing) {
-    if (activeTextChannelId == null) return;
-    _socket?.emit(typing ? 'typing:start' : 'typing:stop', {
-      'channelId': activeTextChannelId,
-    });
+  Future<bool> _sendWithAuthRetry(Future<Map<String, dynamic>?> Function() send) async {
+    var ack = await send();
+    if (ack != null && ack['ok'] == true) return true;
+    if (ack != null && ack['error'] == 'auth-required') {
+      refreshAuth();
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      ack = await send();
+      if (ack != null && ack['ok'] == true) return true;
+    }
+    return false;
   }
 
-  List<String> typingNames(String? channelId) =>
-      typingByChannel[channelId]?.values.toList() ?? const [];
+  /// Notify the active target that we're typing (ChatView debounces the stop).
+  void sendTyping(bool typing, {String? conversationId}) {
+    final data = <String, dynamic>{};
+    if (conversationId != null) {
+      data['conversationId'] = conversationId;
+    } else {
+      if (activeTextChannelId == null) return;
+      data['channelId'] = activeTextChannelId;
+    }
+    _socket?.emit(typing ? 'typing:start' : 'typing:stop', data);
+  }
+
+  List<String> typingNames(String? key) =>
+      typingByChannel[key]?.values.toList() ?? const [];
+
+  /// Manual reconnect (sidebar status tap). Disposes the dead socket so
+  /// connect() builds a fresh one; caches survive (dedup by id on resync).
+  void reconnect() {
+    _socket?.dispose();
+    _socket = null;
+    connected = false;
+    authed = false;
+    notifyListeners();
+    connect();
+  }
+
+  void setVoiceError(String? err) {
+    voiceError = err;
+    notifyListeners();
+  }
+
+  // -- Social API (ack-based; null/non-ok = show it, never swallow) -----------
+
+  Future<void> refreshSocial() async {
+    if (!connected) return;
+    final friendsAck = await _emitAck('friend:list', {});
+    if (friendsAck != null && friendsAck['ok'] == true) {
+      friends = ((friendsAck['friends'] ?? []) as List)
+          .map((e) => SocialUser.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      pendingIn = ((friendsAck['pendingIn'] ?? []) as List)
+          .map((e) => SocialUser.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      pendingOut = ((friendsAck['pendingOut'] ?? []) as List)
+          .map((e) => SocialUser.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    final convAck = await _emitAck('conversation:list', {});
+    if (convAck != null && convAck['ok'] == true) {
+      conversations = ((convAck['conversations'] ?? []) as List)
+          .map((e) => Conversation.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    notifyListeners();
+  }
+
+  /// Returns null on success, otherwise a short error code for the dialog.
+  Future<String?> sendFriendRequest(String email) async {
+    final ack = await _emitAck('friend:request', {'email': email.trim()});
+    if (ack == null) return 'offline';
+    if (ack['ok'] == true) {
+      await refreshSocial();
+      return null;
+    }
+    return (ack['error'] ?? 'failed') as String;
+  }
+
+  Future<bool> acceptFriend(String userId) async {
+    final ack = await _emitAck('friend:accept', {'userId': userId});
+    if (ack != null && ack['ok'] == true) {
+      await refreshSocial();
+      return true;
+    }
+    return false;
+  }
+
+  Future<bool> declineFriend(String userId) async {
+    final ack = await _emitAck('friend:decline', {'userId': userId});
+    if (ack != null && ack['ok'] == true) {
+      await refreshSocial();
+      return true;
+    }
+    return false;
+  }
+
+  Conversation? conversationById(String? id) {
+    if (id == null) return null;
+    for (final c in conversations) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  List<DmMessage> convMessagesFor(String? conversationId) =>
+      dmMessagesByConv[conversationId] ?? const [];
+
+  /// Open a 1:1 DM (find-or-create server-side). Returns error code or null.
+  Future<String?> openDm(String friendId) async {
+    final ack = await _emitAck('dm:open', {'friendId': friendId});
+    if (ack == null) return 'offline';
+    if (ack['ok'] != true) return (ack['error'] ?? 'failed') as String;
+    activeTextChannelId = null;
+    activeConversationId = ack['conversationId'] as String;
+    await refreshSocial();
+    return null;
+  }
+
+  /// Open an existing conversation (group tap, or returning to a DM).
+  void openConversation(String conversationId) {
+    activeTextChannelId = null;
+    activeConversationId = conversationId;
+    _socket?.emit('conv:history', {'conversationId': conversationId});
+    notifyListeners();
+  }
+
+  /// Back to server channels (keeps the first text channel as landing).
+  void closeConversation() {
+    activeConversationId = null;
+    if (activeTextChannelId == null && textChannels.isNotEmpty) {
+      selectTextChannel(textChannels.first.id);
+      return;
+    }
+    notifyListeners();
+  }
+
+  Future<bool> sendConversationMessage(String content) {
+    final text = content.trim();
+    if (text.isEmpty || activeConversationId == null) return Future.value(false);
+    return _sendWithAuthRetry(
+      () => _emitAck('conv:send', {'conversationId': activeConversationId, 'content': text}),
+    );
+  }
+
+  /// Create an opt-in group with friends. Returns conversation id or null.
+  Future<String?> createGroup(String name, List<String> memberIds) async {
+    final ack = await _emitAck('group:create', {'name': name, 'memberIds': memberIds});
+    if (ack != null && ack['ok'] == true) {
+      await refreshSocial();
+      return ack['conversationId'] as String;
+    }
+    return null;
+  }
+
+  Future<bool> leaveGroup(String conversationId) async {
+    final ack = await _emitAck('group:leave', {'conversationId': conversationId});
+    if (activeConversationId == conversationId) closeConversation();
+    await refreshSocial();
+    return ack != null && ack['ok'] == true;
+  }
 
   /// Raw socket access for VoiceService signaling — nothing else should use this.
   io.Socket? get rawSocket => _socket;

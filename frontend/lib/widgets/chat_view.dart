@@ -7,10 +7,13 @@ import 'package:provider/provider.dart';
 import '../core/motion.dart';
 import '../services/socket_service.dart';
 
-/// Center message viewport + input box.
+/// Message viewport + input box, in two modes:
+/// - channel mode (default): server text channel from the sidebar.
+/// - conversation mode: 1:1 DM or opt-in group (service.activeConversationId).
 /// Stateless w.r.t. socket: all state lives in SocketService.
 /// Motion: new arrivals fade+rise once (seen-ids guard against re-animating
 /// history on rebuild), channel header cross-fades, typing row pulses.
+/// Reliability: failed sends show a SnackBar (never swallowed silently).
 class ChatView extends StatefulWidget {
   const ChatView({super.key});
   @override
@@ -23,7 +26,7 @@ class _ChatViewState extends State<ChatView> {
 
   /// Ids already shown: prevents history re-animating on every rebuild.
   final Set<String> _seenIds = {};
-  String? _seenChannel;
+  String? _seenKey;
   Timer? _typingTimer;
   int _sentCount = 0;
 
@@ -35,32 +38,73 @@ class _ChatViewState extends State<ChatView> {
 
   void _onInputChanged(String text) {
     final chat = context.read<SocketService>();
+    final convId = chat.activeConversationId;
     _typingTimer?.cancel();
     if (text.trim().isEmpty) {
-      chat.sendTyping(false);
+      chat.sendTyping(false, conversationId: convId);
       return;
     }
-    chat.sendTyping(true);
+    chat.sendTyping(true, conversationId: convId);
     // Typing-stop debounce: quiet after 2s without keystrokes.
     _typingTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) context.read<SocketService>().sendTyping(false);
+      if (mounted) {
+        context.read<SocketService>().sendTyping(
+              false,
+              conversationId: context.read<SocketService>().activeConversationId,
+            );
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final chat = context.watch<SocketService>();
-    final channelId = chat.activeTextChannelId;
-    final messages = chat.messagesFor(channelId);
-    final typing = chat.typingNames(channelId);
+    final conv = chat.conversationById(chat.activeConversationId);
+    final inConversation = conv != null;
 
-    // Channel switch: absorb all current ids silently so the whole history
-    // doesn't animate at once — only true arrivals play the entrance.
-    if (_seenChannel != channelId) {
-      _seenChannel = channelId;
+    final String viewKey;
+    final String title;
+    final String? subtitle;
+    final List<_RowData> rows;
+    if (inConversation) {
+      viewKey = 'conv:${conv.id}';
+      title = conv.title(chat.userId);
+      subtitle = conv.kind == 'group' ? '${conv.members.length} members' : 'Direct message';
+      rows = chat
+          .convMessagesFor(conv.id)
+          .map((m) => _RowData(
+                id: m.id,
+                authorId: m.authorId,
+                authorName: m.authorName,
+                content: m.content,
+                createdAt: m.createdAt,
+              ))
+          .toList();
+    } else {
+      final channelId = chat.activeTextChannelId;
+      viewKey = 'channel:$channelId';
+      title = '# ${channelId ?? '…'}';
+      subtitle = null;
+      rows = chat
+          .messagesFor(channelId)
+          .map((m) => _RowData(
+                id: m.id,
+                authorId: m.authorId,
+                authorName: m.authorName,
+                content: m.content,
+                createdAt: m.createdAt,
+              ))
+          .toList();
+    }
+    final typing = chat.typingNames(inConversation ? conv.id : chat.activeTextChannelId);
+
+    // View switch: absorb all current ids silently so history doesn't
+    // animate at once — only true arrivals play the entrance.
+    if (_seenKey != viewKey) {
+      _seenKey = viewKey;
       _seenIds
         ..clear()
-        ..addAll(messages.map((m) => m.id));
+        ..addAll(rows.map((m) => m.id));
     }
 
     // Auto-scroll on new message (post-frame to wait for layout).
@@ -68,28 +112,56 @@ class _ChatViewState extends State<ChatView> {
 
     return Column(
       children: [
-        // Channel header (cross-fades on switch).
+        // Header (cross-fades on switch; back + leave in conversation mode).
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           decoration: const BoxDecoration(
             color: Color(0xFF313338),
             border: Border(bottom: BorderSide(color: Colors.black38)),
           ),
-          alignment: Alignment.centerLeft,
-          child: AnimatedSwitcher(
-            duration: Motion.fast,
-            child: Text(
-              '# ${channelId ?? '…'}',
-              key: ValueKey(channelId),
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
+          child: Row(
+            children: [
+              if (inConversation)
+                IconButton(
+                  tooltip: 'Back to channels',
+                  icon: const Icon(Icons.arrow_back, size: 20),
+                  color: Colors.grey[400],
+                  onPressed: () => context.read<SocketService>().closeConversation(),
+                ),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: Motion.fast,
+                  child: Column(
+                    key: ValueKey(viewKey),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(title,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.bold)),
+                      if (subtitle != null)
+                        Text(subtitle,
+                            style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+              if (inConversation && conv.kind == 'group')
+                IconButton(
+                  tooltip: 'Leave group',
+                  icon: const Icon(Icons.exit_to_app, size: 20),
+                  color: Colors.grey[400],
+                  onPressed: () => _confirmLeaveGroup(context, conv.id, title),
+                ),
+            ],
           ),
         ),
         // Messages
         Expanded(
           child: Container(
             color: const Color(0xFF313338),
-            child: messages.isEmpty
+            child: rows.isEmpty
                 ? const Center(
                     child: Text('Nothing here yet — say hi',
                         style: TextStyle(color: Colors.grey)),
@@ -97,9 +169,9 @@ class _ChatViewState extends State<ChatView> {
                 : ListView.builder(
                     controller: _scroll,
                     padding: const EdgeInsets.all(12),
-                    itemCount: messages.length,
+                    itemCount: rows.length,
                     itemBuilder: (_, i) {
-                      final m = messages[i];
+                      final m = rows[i];
                       final mine = m.authorId == chat.userId;
                       final isNew = _seenIds.add(m.id);
                       final row = _MessageRow(
@@ -155,7 +227,7 @@ class _ChatViewState extends State<ChatView> {
             maxLines: 4,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: 'Message #${channelId ?? ''}',
+              hintText: 'Message $title',
               hintStyle: const TextStyle(color: Colors.grey),
               filled: true,
               fillColor: const Color(0xFF383A40),
@@ -182,13 +254,58 @@ class _ChatViewState extends State<ChatView> {
     );
   }
 
-  void _send() {
+  Future<void> _send() async {
     final chat = context.read<SocketService>();
-    chat.sendTyping(false);
+    final text = _input.text;
+    if (text.trim().isEmpty) return;
+    chat.sendTyping(false, conversationId: chat.activeConversationId);
     _typingTimer?.cancel();
-    chat.sendMessage(_input.text);
     _input.clear();
     setState(() => _sentCount++);
+    final ok = chat.activeConversationId != null
+        ? await chat.sendConversationMessage(text)
+        : await chat.sendMessage(text);
+    // THE fix for "messages don't arrive": a failed send is now visible
+    // with a retry action instead of vanishing silently.
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("Couldn't send — check connection, then retry."),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () {
+              _input.text = text;
+              _send();
+            },
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _confirmLeaveGroup(BuildContext context, String convId, String title) async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2B2D31),
+        title: Text('Leave "$title"?', style: const TextStyle(color: Colors.white, fontSize: 16)),
+        content: const Text('You will stop receiving its messages.',
+            style: TextStyle(color: Colors.grey, fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Stay'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && context.mounted) {
+      await context.read<SocketService>().leaveGroup(convId);
+    }
   }
 
   @override
@@ -198,6 +315,22 @@ class _ChatViewState extends State<ChatView> {
     _scroll.dispose();
     super.dispose();
   }
+}
+
+/// Flat row projection shared by channel + conversation messages.
+class _RowData {
+  final String id;
+  final String authorId;
+  final String authorName;
+  final String content;
+  final DateTime createdAt;
+  const _RowData({
+    required this.id,
+    required this.authorId,
+    required this.authorName,
+    required this.content,
+    required this.createdAt,
+  });
 }
 
 class _MessageRow extends StatelessWidget {

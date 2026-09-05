@@ -37,6 +37,29 @@ class ChannelSidebar extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 4),
+                // Tappable status: shows auth state (the old "Connected" hid
+                // expired sessions — the "messages vanish" class of bug) and
+                // retries the connection on tap when offline.
+                InkWell(
+                  onTap: chat.connected ? null : chat.reconnect,
+                  child: Text(
+                    !chat.connected
+                        ? '○ Connecting… (tap to retry)'
+                        : chat.authed
+                            ? '● Connected ✓'
+                            : '● Connected — verifying login…',
+                    style: TextStyle(
+                        color: !chat.connected
+                            ? Colors.grey
+                            : chat.authed
+                                ? Colors.greenAccent
+                                : Colors.orangeAccent,
+                        fontSize: 12),
+                  ),
+                ),
+                if (chat.authError != null)
+                  Text('Login issue: ${chat.authError}',
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
                 _ServerField(
                   key: ValueKey(chat.serverUrl),
                   initial: chat.serverUrl,
@@ -45,10 +68,6 @@ class ChannelSidebar extends StatelessWidget {
                     await chat.setServerUrl(url);
                   },
                 ),
-                const SizedBox(height: 4),
-                Text(chat.connected ? '● Connected' : '○ Connecting…',
-                    style: TextStyle(
-                        color: chat.connected ? Colors.greenAccent : Colors.grey, fontSize: 12)),
               ],
             ),
           ),
@@ -83,6 +102,70 @@ class ChannelSidebar extends StatelessWidget {
                       }
                       onNavigate?.call();
                     },
+                  ),
+                const SizedBox(height: 12),
+                // -- Friends: tap a friend to open the 1:1 private chat. -----
+                _SectionHeader(
+                  'FRIENDS',
+                  onAdd: () => _showAddFriend(context),
+                  count: chat.pendingIn.length,
+                ),
+                for (final r in chat.pendingIn)
+                  _RequestRow(
+                    name: r.username,
+                    detail: r.email ?? 'wants to be friends',
+                    onAccept: () => chat.acceptFriend(r.userId),
+                    onDecline: () => chat.declineFriend(r.userId),
+                  ),
+                for (final f in chat.friends)
+                  _FriendRow(
+                    name: f.username,
+                    online: f.online,
+                    selected: _isDmWith(chat, f.userId),
+                    onTap: () async {
+                      final err = await chat.openDm(f.userId);
+                      if (err != null && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Could not open chat ($err).')),
+                        );
+                      }
+                      onNavigate?.call();
+                    },
+                  ),
+                if (chat.friends.isEmpty && chat.pendingIn.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 2, 16, 4),
+                    child: Text('No friends yet — tap + to add by email.',
+                        style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  ),
+                if (chat.pendingOut.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+                    child: Text('Invite sent: ${chat.pendingOut.map((p) => p.username).join(', ')}',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                  ),
+                const SizedBox(height: 12),
+                // -- Groups: opt-in only, never automatic. --------------------
+                _SectionHeader(
+                  'GROUPS',
+                  onAdd: () => _showCreateGroup(context),
+                ),
+                for (final g in chat.conversations.where((c) => c.kind == 'group'))
+                  _GroupRow(
+                    name: (g.name?.isNotEmpty ?? false) ? g.name! : 'Group',
+                    members: g.members.length,
+                    selected: g.id == chat.activeConversationId,
+                    onTap: () {
+                      chat.openConversation(g.id);
+                      onNavigate?.call();
+                    },
+                  ),
+                if (!chat.conversations.any((c) => c.kind == 'group'))
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 2, 16, 4),
+                    child: Text('No groups — tap + to create one with friends.',
+                        style: TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
               ],
             ),
@@ -215,6 +298,382 @@ class _VoiceRow extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// True when the open conversation is the 1:1 DM with [friendId].
+bool _isDmWith(SocketService chat, String friendId) {
+  final conv = chat.conversationById(chat.activeConversationId);
+  if (conv == null || conv.kind != 'dm') return false;
+  return conv.members.any((m) => m.userId == friendId);
+}
+
+/// Section header with an optional [+] action and pending-count badge.
+class _SectionHeader extends StatelessWidget {
+  final String text;
+  final VoidCallback? onAdd;
+  final int count;
+  const _SectionHeader(this.text, {this.onAdd, this.count = 0});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Text(text,
+                      style: const TextStyle(
+                          color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+                  if (count > 0) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                          color: Colors.redAccent, borderRadius: BorderRadius.circular(9)),
+                      child: Text('$count',
+                          style: const TextStyle(color: Colors.white, fontSize: 10)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (onAdd != null)
+              InkWell(
+                onTap: onAdd,
+                borderRadius: BorderRadius.circular(4),
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.add, size: 16, color: Colors.grey),
+                ),
+              ),
+          ],
+        ),
+      );
+}
+
+class _FriendRow extends StatelessWidget {
+  final String name;
+  final bool online;
+  final bool selected;
+  final VoidCallback onTap;
+  const _FriendRow({required this.name, required this.online, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+        child: AnimatedContainer(
+          duration: Motion.base,
+          curve: Motion.standard,
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFF404249) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: online ? Colors.greenAccent : Colors.grey[600],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: selected ? Colors.white : Colors.grey[400], fontSize: 14)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+class _RequestRow extends StatelessWidget {
+  final String name;
+  final String detail;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+  const _RequestRow({required this.name, required this.detail, required this.onAccept, required this.onDecline});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF383A40),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 13)),
+                    Text(detail,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Accept',
+                icon: const Icon(Icons.check, size: 18),
+                color: Colors.greenAccent,
+                onPressed: onAccept,
+              ),
+              IconButton(
+                tooltip: 'Decline',
+                icon: const Icon(Icons.close, size: 18),
+                color: Colors.redAccent,
+                onPressed: onDecline,
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+class _GroupRow extends StatelessWidget {
+  final String name;
+  final int members;
+  final bool selected;
+  final VoidCallback onTap;
+  const _GroupRow({required this.name, required this.members, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+        child: AnimatedContainer(
+          duration: Motion.base,
+          curve: Motion.standard,
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFF404249) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.group,
+                      size: 16, color: selected ? Colors.white : Colors.grey[400]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: selected ? Colors.white : Colors.grey[400], fontSize: 14)),
+                  ),
+                  Text('$members',
+                      style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// Add-friend dialog: invite by the exact email they signed up with.
+Future<void> _showAddFriend(BuildContext context) async {
+  final email = TextEditingController();
+  String? error;
+  bool busy = false;
+  final chat = context.read<SocketService>();
+
+  Future<void> doSend(StateSetter setState, BuildContext ctx) async {
+    if (busy || email.text.trim().isEmpty) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    final err = await chat.sendFriendRequest(email.text);
+    if (!ctx.mounted) return;
+    if (err == null) {
+      Navigator.of(ctx).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invite sent.')),
+      );
+    } else {
+      setState(() {
+        busy = false;
+        error = err;
+      });
+    }
+  }
+
+  await showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => AlertDialog(
+        backgroundColor: const Color(0xFF2B2D31),
+        title: const Text('Add friend', style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Their signup email:', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: email,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'friend@example.com',
+                hintStyle: const TextStyle(color: Colors.grey),
+                filled: true,
+                fillColor: const Color(0xFF1E1F22),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+              ),
+              onSubmitted: (_) => doSend(setState, ctx),
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 8),
+              Text(_friendErrorText(error!),
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+            onPressed: busy ? null : () => doSend(setState, ctx),
+            child: const Text('Send invite'),
+          ),
+        ],
+      ),
+    ),
+  );
+  email.dispose();
+}
+
+String _friendErrorText(String code) {
+  switch (code) {
+    case 'not-found':
+      return 'No account with that email yet.';
+    case 'self':
+      return 'That is your own email.';
+    case 'already-friends':
+      return 'You are already friends.';
+    case 'already-pending':
+      return 'Invite already pending.';
+    case 'offline':
+      return 'Not connected — retry in a moment.';
+    default:
+      return 'Could not send invite ($code).';
+  }
+}
+
+/// Create-group dialog: name + pick from friends (groups are opt-in only).
+Future<void> _showCreateGroup(BuildContext context) async {
+  final chat = context.read<SocketService>();
+  if (chat.friends.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Add friends first, then create a group.')),
+    );
+    return;
+  }
+  final name = TextEditingController();
+  final selected = <String>{};
+  bool busy = false;
+  await showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => AlertDialog(
+        backgroundColor: const Color(0xFF2B2D31),
+        title: const Text('New group', style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: name,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Group name',
+                  hintStyle: const TextStyle(color: Colors.grey),
+                  filled: true,
+                  fillColor: const Color(0xFF1E1F22),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text('Invite friends:', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 4),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final f in chat.friends)
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(f.username,
+                            style: const TextStyle(color: Colors.white, fontSize: 13)),
+                        value: selected.contains(f.userId),
+                        onChanged: (v) => setState(() {
+                          if (v == true) {
+                            selected.add(f.userId);
+                          } else {
+                            selected.remove(f.userId);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+            onPressed: busy || selected.isEmpty
+                ? null
+                : () async {
+                    setState(() => busy = true);
+                    final id = await ctx
+                        .read<SocketService>()
+                        .createGroup(name.text, selected.toList());
+                    if (!ctx.mounted) return;
+                    Navigator.of(ctx).pop();
+                    if (id != null) {
+                      context.read<SocketService>().openConversation(id);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Could not create group.')),
+                      );
+                    }
+                  },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    ),
+  );
+  name.dispose();
 }
 
 /// Discord blurple — kept as a const to avoid extra theme packages.

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'socket_service.dart';
@@ -102,17 +104,34 @@ class VoiceService extends ChangeNotifier {
   /// Click-to-join: get mic, register signaling, then offer to each peer
   /// the server listed in `voice:joined`.
   Future<void> join(String channelId) async {
+    signaling.setVoiceError(null);
     await _ensureHandlers();
-    _localStream ??= await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+    try {
+      _localStream ??= await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+    } catch (_) {
+      // Mic denied/missing used to throw into the void (looked "buggy").
+      signaling.setVoiceError('Microphone unavailable — check app permission.');
+      return;
+    }
     _applyMute();
 
     // Server seats the socket by its verified auth identity — no user
     // fields are sent (they'd be ignored anyway).
     signaling.rawSocket?.emit('voice:join', {'channelId': channelId});
 
+    // Wait for the server's authoritative participant list instead of a
+    // fixed delay (the old 400ms raced slow networks → peers never got
+    // offers → silent no-audio rooms).
+    final seated = await _waitVoiceJoined(channelId);
+    if (!seated) {
+      // A specific error (e.g. auth-required from the service listener)
+      // wins over this generic timeout message.
+      if (signaling.voiceError == null) {
+        signaling.setVoiceError('Voice server did not answer — tap the message to retry.');
+      }
+      return;
+    }
     // Offer to pre-existing peers; late joiners will offer to us in turn.
-    // Small delay lets `voice:joined` populate participant list first.
-    await Future<void>.delayed(const Duration(milliseconds: 400));
     for (final p in signaling.voiceParticipants) {
       if (p.socketId == signaling.selfSocketId || _peers.containsKey(p.socketId)) continue;
       final pc = await _createPeer(p.socketId);
@@ -127,7 +146,30 @@ class VoiceService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// One-shot wait for our own `voice:joined` (server authoritative).
+  /// False on server rejection or timeout — the caller surfaces a retryable
+  /// error instead of joining a dead room.
+  Future<bool> _waitVoiceJoined(String channelId) {
+    final completer = Completer<bool>();
+    void completeOnce(bool v) {
+      if (!completer.isCompleted) completer.complete(v);
+    }
+
+    void joinedHandler(dynamic data) {
+      try {
+        final m = Map<String, dynamic>.from(data as Map);
+        if (m['channelId'] == channelId) completeOnce(true);
+      } catch (_) {/* ignore malformed */}
+    }
+
+    signaling.rawSocket?.once('voice:joined', joinedHandler);
+    signaling.rawSocket?.once('voice:error', (_) => completeOnce(false));
+    Future<void>.delayed(const Duration(seconds: 8), () => completeOnce(false));
+    return completer.future;
+  }
+
   Future<void> leave() async {
+    signaling.setVoiceError(null);
     signaling.rawSocket?.emit('voice:leave', {});
     for (final id in _peers.keys.toList()) {
       await _removePeer(id);

@@ -40,16 +40,25 @@ x.on('connect', () => {
     { channelId: 'general', authorId: 'spoof', authorName: 'Spoof', content: 'nope' },
     (ack) => {
       ok('unauth message:send rejected', ack && ack.ok === false);
-      x.emit('voice:join', { channelId: 'lounge', userId: 'spoof', username: 'Spoof' });
-      setTimeout(() => {
-        ok('unauth voice:join rejected', !voiceJoined && !!voiceError);
-        x.disconnect();
-        if (JWT) phase2();
-        else {
-          clearTimeout(timeout);
-          finish();
-        }
-      }, 800);
+      x.emit('friend:request', { email: 'nobody@example.com' }, (ack2) => {
+        ok('unauth friend:request rejected', ack2 && ack2.ok === false);
+        x.emit('conv:send', { conversationId: '00000000-0000-0000-0000-000000000000', content: 'nope' }, (ack3) => {
+          ok('unauth conv:send rejected', ack3 && ack3.ok === false);
+          x.emit('group:create', { name: 'nope', memberIds: [] }, (ack4) => {
+            ok('unauth group:create rejected', ack4 && ack4.ok === false);
+            x.emit('voice:join', { channelId: 'lounge', userId: 'spoof', username: 'Spoof' });
+            setTimeout(() => {
+              ok('unauth voice:join rejected', !voiceJoined && !!voiceError);
+              x.disconnect();
+              if (JWT) phase2();
+              else {
+                clearTimeout(timeout);
+                finish();
+              }
+            }, 800);
+          });
+        });
+      });
     },
   );
 });

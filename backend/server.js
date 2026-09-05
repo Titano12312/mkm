@@ -41,6 +41,9 @@ let VOICE_IDS = new Set(channels.voice.map((c) => c.id));
 // durable copy (see db.js). Bounded so a restart without DB stays healthy.
 const HISTORY_LIMIT = db.HISTORY_LIMIT;
 const messageHistory = new Map(); // channelId -> Array<message>
+// Write-through cache for conversations (mirrors messageHistory).
+const convHistory = new Map(); // conversationId -> Array<message>
+const convRoom = (id) => `conv:${id}`;
 const onlineUsers = new Map(); // socketId -> { userId, username }
 const authed = new Map(); // socketId -> { userId, username } verified via Supabase JWT
 const voiceRooms = new Map(); // voiceChannelId -> Map<socketId, { userId, username }>
@@ -193,6 +196,163 @@ io.on('connection', (socket) => {
     db.saveMessage(msg);
   });
 
+  // -- Social: friends, DMs, groups (opt-in) ----------------------------------
+  // DMs are friends-only; groups are created explicitly and never automatic.
+  const requireAuth = (ack) => {
+    const identity = authed.get(socket.id);
+    if (!identity && typeof ack === 'function') ack({ ok: false, error: 'auth-required' });
+    return identity;
+  };
+
+  // Nudge all online sockets of a user (they refetch via friend:list /
+  // conversation:list — no sensitive data pushed blindly).
+  const emitToUser = (userId, event, data) => {
+    for (const [sid, u] of onlineUsers.entries()) {
+      if (u.userId === userId) io.to(sid).emit(event, data);
+    }
+  };
+
+  socket.on('friend:request', async ({ email } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.requestFriend(me.userId, email);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok && res.target) emitToUser(res.target.user_id, 'social:refresh', {});
+  });
+
+  socket.on('friend:accept', async ({ userId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.acceptFriend(me.userId, userId);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) {
+      emitToUser(userId, 'social:refresh', {});
+      emitToUser(me.userId, 'social:refresh', {});
+    }
+  });
+
+  socket.on('friend:decline', async ({ userId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.declineFriend(me.userId, userId);
+    if (typeof ack === 'function') ack(res);
+  });
+
+  socket.on('friend:list', async (_, ack) => {
+    const me = authed.get(socket.id);
+    if (!me) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'auth-required' });
+      return;
+    }
+    const social = await db.listSocial(me.userId);
+    // Annotate live presence from memory (the DB can't know socket state).
+    const onlineIds = new Set([...onlineUsers.values()].map((u) => u.userId));
+    for (const f of social.friends) f.online = onlineIds.has(f.userId);
+    if (typeof ack === 'function') ack({ ok: true, ...social });
+  });
+
+  socket.on('conversation:list', async (_, ack) => {
+    const me = authed.get(socket.id);
+    if (!me) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'auth-required' });
+      return;
+    }
+    const conversations = await db.getMyConversations(me.userId);
+    // Auto-join every conversation room so DMs arrive even while browsing
+    // a server channel (the #1 "messages don't arrive" class of bug).
+    for (const c of conversations) socket.join(convRoom(c.id));
+    if (typeof ack === 'function') ack({ ok: true, conversations });
+  });
+
+  socket.on('dm:open', async ({ friendId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    if (!(await db.areFriends(me.userId, friendId))) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'not-friends' });
+      return;
+    }
+    const conversationId = await db.findOrCreateDm(me.userId, friendId);
+    if (!conversationId) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'db-error' });
+      return;
+    }
+    socket.join(convRoom(conversationId));
+    if (typeof ack === 'function') ack({ ok: true, conversationId });
+    const persisted = await db.getDmHistory(conversationId);
+    if (persisted) convHistory.set(conversationId, persisted.slice(-HISTORY_LIMIT));
+    socket.emit('dm:history', { conversationId, messages: convHistory.get(conversationId) || [] });
+  });
+
+  socket.on('conv:history', async ({ conversationId } = {}) => {
+    const me = authed.get(socket.id);
+    if (!me || !conversationId) return;
+    if (!(await db.isMember(conversationId, me.userId))) return;
+    socket.join(convRoom(conversationId));
+    const persisted = await db.getDmHistory(conversationId);
+    if (persisted) convHistory.set(conversationId, persisted.slice(-HISTORY_LIMIT));
+    socket.emit('dm:history', { conversationId, messages: convHistory.get(conversationId) || [] });
+  });
+
+  socket.on('conv:send', async ({ conversationId, content } = {}, ack) => {
+    const fail = (error) => {
+      if (typeof ack === 'function') ack({ ok: false, error });
+    };
+    const me = authed.get(socket.id);
+    if (!me) return fail('auth-required');
+    if (!conversationId || !(await db.isMember(conversationId, me.userId))) {
+      return fail('not-member');
+    }
+    const text = typeof content === 'string' ? content.trim().slice(0, 2000) : '';
+    if (!text) return fail('empty');
+    const msg = {
+      id: `${Date.now()}-${socket.id.slice(0, 6)}`,
+      conversationId,
+      authorId: me.userId,
+      authorName: me.username,
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+    const hist = convHistory.get(conversationId) || [];
+    hist.push(msg);
+    if (hist.length > HISTORY_LIMIT) hist.splice(0, hist.length - HISTORY_LIMIT);
+    convHistory.set(conversationId, hist);
+
+    io.to(convRoom(conversationId)).emit('dm:receive', msg);
+    if (typeof ack === 'function') ack({ ok: true, id: msg.id });
+    // Persist best-effort AFTER broadcast (realtime never waits on the DB).
+    db.saveDmMessage(msg);
+  });
+
+  socket.on('group:create', async ({ name, memberIds } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const ids = [...new Set((memberIds || []).filter((id) => id && id !== me.userId))];
+    // Groups are friends-only: every invitee must already be a friend.
+    for (const id of ids) {
+      if (!(await db.areFriends(me.userId, id))) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'not-friends' });
+        return;
+      }
+    }
+    const res = await db.createGroup(me.userId, name, ids);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) {
+      socket.join(convRoom(res.conversationId));
+      for (const id of ids) emitToUser(id, 'social:refresh', {});
+      emitToUser(me.userId, 'social:refresh', {});
+    }
+  });
+
+  socket.on('group:leave', async ({ conversationId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    socket.leave(convRoom(conversationId));
+    const res = await db.leaveGroup(conversationId, me.userId);
+    if (typeof ack === 'function') ack(res);
+    const members = await db.getMembers(conversationId).catch(() => []);
+    io.to(convRoom(conversationId)).emit('conv:update', { conversationId, members });
+  });
+
   // -- Voice channels (click-to-join / click-to-leave) ------------------------
   socket.on('voice:join', async ({ channelId } = {}) => {
     if (!VOICE_IDS.has(channelId)) return;
@@ -242,17 +402,24 @@ io.on('connection', (socket) => {
   });
 
   // -- Typing indicators (ephemeral: broadcast only, never persisted) --------
-  // Powers the "X is typing…" row. Authed-only so names can't be spoofed.
+  // Powers the "X is typing…" row in channels AND conversations.
+  // Authed-only so names can't be spoofed.
   for (const [event, typing] of [['typing:start', true], ['typing:stop', false]]) {
-    socket.on(event, ({ channelId } = {}) => {
+    socket.on(event, async ({ channelId, conversationId } = {}) => {
       const identity = authed.get(socket.id);
-      if (!identity || !TEXT_IDS.has(channelId)) return;
-      socket.to(textRoom(channelId)).emit('typing:update', {
-        channelId,
+      if (!identity) return;
+      const payload = {
         userId: identity.userId,
         username: identity.username,
         typing,
-      });
+      };
+      if (conversationId) {
+        if (!(await db.isMember(conversationId, identity.userId))) return;
+        socket.to(convRoom(conversationId)).emit('typing:update', { ...payload, conversationId });
+        return;
+      }
+      if (!TEXT_IDS.has(channelId)) return;
+      socket.to(textRoom(channelId)).emit('typing:update', { ...payload, channelId });
     });
   }
 
