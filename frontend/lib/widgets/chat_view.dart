@@ -411,9 +411,9 @@ class _Body extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        CircleAvatar(
-          radius: 16,
-          backgroundColor: mine ? const Color(0xFF5865F2) : Colors.grey[700],
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: mine ? const Color(0xFFFF5757) : Colors.grey[700],
           child: Text(authorName.isNotEmpty ? authorName[0].toUpperCase() : '?',
               style: const TextStyle(color: Colors.white, fontSize: 13)),
         ),
@@ -424,11 +424,11 @@ class _Body extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(authorName,
-                      style: TextStyle(
-                          color: mine ? const Color(0xFF949CF7) : Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13)),
+                    Text(authorName,
+                        style: TextStyle(
+                            color: mine ? const Color(0xFFFF9E9E) : Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13)),
                   const SizedBox(width: 8),
                   Text(_fmtTime(createdAt),
                       style: const TextStyle(color: Colors.grey, fontSize: 11)),

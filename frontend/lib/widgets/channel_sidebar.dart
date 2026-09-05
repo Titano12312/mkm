@@ -24,7 +24,7 @@ class ChannelSidebar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // App header + identity (name comes from Google, not editable —
+          // App header + identity (name comes from the account, not editable —
           // the server stamps messages from the verified token anyway).
           Padding(
             padding: const EdgeInsets.all(12),
@@ -209,7 +209,7 @@ class ChannelSidebar extends StatelessWidget {
               children: [
                 CircleAvatar(
                   radius: 14,
-                  backgroundColor: const Color(0xFF5865F2),
+                  backgroundColor: const Color(0xFFFF5757),
                   child: Text(chat.username.isNotEmpty ? chat.username[0].toUpperCase() : '?',
                       style: const TextStyle(color: Colors.white, fontSize: 12)),
                 ),
@@ -524,8 +524,10 @@ class _GroupRow extends StatelessWidget {
       );
 }
 
-/// Discord blurple — kept as a const to avoid extra theme packages.
-const kBlurple = Color(0xFF5865F2);
+/// Brand coral (logo) + soft variant — the single accent family.
+/// Neutrals stay grey; green/red keep their semantic jobs (online, errors).
+const kBrand = Color(0xFFFF5757);
+const kBrandLight = Color(0xFFFF9E9E);
 
 /// Press feedback for sidebar rows. The sidebar has no Material ancestor,
 /// so InkWell ripples would render nothing — a transform-only press scale

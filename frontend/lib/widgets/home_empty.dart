@@ -32,12 +32,12 @@ class HomeEmpty extends StatelessWidget {
             const Positioned(
               top: -60,
               left: -70,
-              child: _Blob(color: Color(0xFF5865F2), delay: 0),
+              child: _Blob(color: Color(0xFFFF5757), delay: 0),
             ),
             const Positioned(
               bottom: -80,
               right: -60,
-              child: _Blob(color: Color(0xFF949CF7), delay: 1500),
+              child: _Blob(color: Color(0xFFFF9E9E), delay: 1500),
             ),
           ],
           Center(
@@ -77,7 +77,7 @@ class HomeEmpty extends StatelessWidget {
                   icon: const Icon(Icons.person_add, size: 18),
                   label: const Text('Add a friend', style: TextStyle(fontSize: 15)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF5865F2),
+                    backgroundColor: const Color(0xFFFF5757),
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
@@ -87,7 +87,7 @@ class HomeEmpty extends StatelessWidget {
               TextButton(
                 onPressed: () => showCreateGroupDialog(context),
                 child: const Text('or create a group',
-                    style: TextStyle(color: Color(0xFF949CF7), fontSize: 13)),
+                    style: TextStyle(color: Color(0xFFFF9E9E), fontSize: 13)),
               ),
             ],
           ),

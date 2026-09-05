@@ -129,7 +129,7 @@ class _ParticipantChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final avatar = CircleAvatar(
       radius: 12,
-      backgroundColor: self ? const Color(0xFF5865F2) : Colors.grey[700],
+      backgroundColor: self ? const Color(0xFFFF5757) : Colors.grey[700],
       child: Text(username.isNotEmpty ? username[0].toUpperCase() : '?',
           style: const TextStyle(color: Colors.white, fontSize: 11)),
     );

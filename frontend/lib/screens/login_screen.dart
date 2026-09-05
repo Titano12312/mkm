@@ -4,9 +4,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../core/motion.dart';
 import '../services/auth_service.dart';
 
-/// Login screen — email/password (primary) + Google (when enabled).
-/// Open registration for the friends group; first login creates the profile.
-/// Motion: elastic logo drop, staggered rise of the blocks below.
+/// Login screen — email + password, open registration for friends.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
   @override
@@ -37,22 +35,6 @@ class _LoginScreenState extends State<LoginScreen> {
       // Success needs no navigation: the auth-state stream flips and
       // AuthGate swaps to the chat shell by itself.
       if (err != null && mounted) setState(() => _error = err);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _loginGoogle() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      // Opens the system browser; success arrives via the auth-state
-      // stream (AuthGate navigates), not via this future.
-      await AuthService.signInWithGoogle();
-    } catch (_) {
-      setState(() => _error = 'Google login is not enabled yet — use email instead.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -159,7 +141,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: ElevatedButton(
                         onPressed: _busy ? null : _submitEmail,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF5865F2),
+                          backgroundColor: const Color(0xFFFF5757),
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
@@ -173,43 +155,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               )
                             : Text(_signupMode ? 'Create account' : 'Sign in',
                                 style: const TextStyle(fontSize: 15)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Row(
-                    children: [
-                      Expanded(child: Divider(color: Colors.white24)),
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12),
-                        child: Text('or', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                      ),
-                      Expanded(child: Divider(color: Colors.white24)),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton(
-                      onPressed: _busy ? null : _loginGoogle,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white24),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('G',
-                              style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF4285F4))),
-                          SizedBox(width: 12),
-                          Text('Continue with Google', style: TextStyle(fontSize: 15)),
-                        ],
                       ),
                     ),
                   ),
