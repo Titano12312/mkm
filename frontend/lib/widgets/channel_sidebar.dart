@@ -43,32 +43,35 @@ class ChannelSidebar extends StatelessWidget {
                 // retries the connection on tap when offline.
                 InkWell(
                   onTap: chat.connected ? null : chat.reconnect,
-                  child: Text(
-                    !chat.connected
-                        ? '○ Connecting… (tap to retry)'
-                        : chat.authed
-                            ? '● Connected ✓'
-                            : '● Connected — verifying login…',
-                    style: TextStyle(
-                        color: !chat.connected
-                            ? Colors.grey
-                            : chat.authed
-                                ? Colors.greenAccent
-                                : Colors.orangeAccent,
-                        fontSize: 12),
+                  child: AnimatedSwitcher(
+                    duration: Motion.fast,
+                    child: Text(
+                      !chat.connected
+                          ? '○ Connecting… (tap to retry)'
+                          : chat.authed
+                              ? '● Connected ✓'
+                              : '● Connected — verifying login…',
+                      key: ValueKey(!chat.connected
+                          ? 'off'
+                          : chat.authed
+                              ? 'on'
+                              : 'verifying'),
+                      style: TextStyle(
+                          color: !chat.connected
+                              ? Colors.grey
+                              : chat.authed
+                                  ? Colors.greenAccent
+                                  : Colors.orangeAccent,
+                          fontSize: 12),
+                    ),
                   ),
                 ),
                 if (chat.authError != null)
                   Text('Login issue: ${chat.authError}',
                       style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
-                _ServerField(
-                  key: ValueKey(chat.serverUrl),
-                  initial: chat.serverUrl,
-                  onSubmit: (url) async {
-                    if (voice.inCall) await voice.leave();
-                    await chat.setServerUrl(url);
-                  },
-                ),
+                // NOTE: no server address shown here by design. The backend
+                // URL is baked at build time; SocketService.setServerUrl
+                // remains for debug/repoint builds only.
               ],
             ),
           ),
@@ -268,8 +271,7 @@ class _TextRow extends StatelessWidget {
             color: selected ? const Color(0xFF404249) : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(6),
+          child: _Pressable(
             onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -298,8 +300,7 @@ class _VoiceRow extends StatelessWidget {
             color: active ? const Color(0xFF404249) : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(6),
+          child: _Pressable(
             onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -367,13 +368,19 @@ class _SectionHeader extends StatelessWidget {
               ),
             ),
             if (onAdd != null)
-              InkWell(
-                onTap: onAdd,
-                borderRadius: BorderRadius.circular(4),
-                child: const Padding(
-                  padding: EdgeInsets.all(4),
-                  child: Icon(Icons.add, size: 16, color: Colors.grey),
+              // IconButton (not bare InkWell): built-in ripple + semantics
+              // with a shrunk hit area to keep the header compact.
+              IconButton(
+                tooltip: 'Add',
+                iconSize: 16,
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(),
+                style: IconButton.styleFrom(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
+                color: Colors.grey,
+                onPressed: onAdd,
+                icon: const Icon(Icons.add),
               ),
           ],
         ),
@@ -397,8 +404,7 @@ class _FriendRow extends StatelessWidget {
             color: selected ? const Color(0xFF404249) : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(6),
+          child: _Pressable(
             onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -493,8 +499,7 @@ class _GroupRow extends StatelessWidget {
             color: selected ? const Color(0xFF404249) : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(6),
+          child: _Pressable(
             onTap: onTap,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -522,53 +527,32 @@ class _GroupRow extends StatelessWidget {
 /// Discord blurple — kept as a const to avoid extra theme packages.
 const kBlurple = Color(0xFF5865F2);
 
-/// Backend address field. Same styling as the username field; submits an
-/// async reconnect (caller leaves voice first — see usage above).
-class _ServerField extends StatefulWidget {
-  final String initial;
-  final Future<void> Function(String) onSubmit;
-  const _ServerField({super.key, required this.initial, required this.onSubmit});
+/// Press feedback for sidebar rows. The sidebar has no Material ancestor,
+/// so InkWell ripples would render nothing — a transform-only press scale
+/// works anywhere and stays inside the animation budget.
+class _Pressable extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  const _Pressable({required this.child, required this.onTap});
   @override
-  State<_ServerField> createState() => _ServerFieldState();
+  State<_Pressable> createState() => _PressableState();
 }
 
-class _ServerFieldState extends State<_ServerField> {
-  late final TextEditingController _c;
-  bool _busy = false;
+class _PressableState extends State<_Pressable> {
+  bool _down = false;
   @override
-  void initState() {
-    super.initState();
-    _c = TextEditingController(text: widget.initial);
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) => setState(() => _down = false),
+      onTapCancel: () => setState(() => _down = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _down ? 0.97 : 1.0,
+        duration: Motion.fast,
+        curve: Motion.standard,
+        child: widget.child,
+      ),
+    );
   }
-
-  @override
-  Widget build(BuildContext context) => TextField(
-        controller: _c,
-        enabled: !_busy,
-        keyboardType: TextInputType.url,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: 'Server URL',
-          hintStyle: const TextStyle(color: Colors.grey, fontSize: 12),
-          filled: true,
-          fillColor: const Color(0xFF1E1F22),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          suffixIcon: _busy
-              ? const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
-                )
-              : null,
-        ),
-        onSubmitted: (v) async {
-          setState(() => _busy = true);
-          try {
-            await widget.onSubmit(v);
-          } finally {
-            if (mounted) setState(() => _busy = false);
-          }
-        },
-      );
 }

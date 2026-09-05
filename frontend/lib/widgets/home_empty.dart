@@ -26,8 +26,24 @@ class HomeEmpty extends StatelessWidget {
     );
     return Container(
       color: const Color(0xFF313338),
-      alignment: Alignment.center,
-      child: ConstrainedBox(
+      // Ambient brand blobs drifting behind the content (transform-only,
+      // low opacity, static under reduced motion).
+      child: Stack(
+        children: [
+          if (!reduce) ...[
+            const Positioned(
+              top: -60,
+              left: -70,
+              child: _Blob(color: Color(0xFF5865F2), delay: 0),
+            ),
+            const Positioned(
+              bottom: -80,
+              right: -60,
+              child: _Blob(color: Color(0xFF949CF7), delay: 1500),
+            ),
+          ],
+          Center(
+            child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 340),
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -79,6 +95,37 @@ class HomeEmpty extends StatelessWidget {
           ),
         ),
       ),
+      ),
+        ],
+      ),
     );
+  }
+}
+
+/// Soft radial brand glow. Drifts slowly on a loop; pure decoration.
+class _Blob extends StatelessWidget {
+  final Color color;
+  final int delay;
+  const _Blob({required this.color, required this.delay});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 220,
+      height: 220,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [color.withAlpha(46), color.withAlpha(0)],
+        ),
+      ),
+    )
+        .animate(onPlay: (c) => c.repeat(reverse: true))
+        .move(
+          begin: Offset.zero,
+          end: const Offset(24, 32),
+          duration: const Duration(seconds: 7),
+          delay: Duration(milliseconds: delay),
+        );
   }
 }

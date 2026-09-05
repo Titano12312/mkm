@@ -69,11 +69,18 @@ class VoiceBar extends StatelessWidget {
             ),
           ),
           IconButton(
+            key: ValueKey('mic-${voice.muted}'),
             tooltip: voice.muted ? 'Unmute' : 'Mute',
             icon: Icon(voice.muted ? Icons.mic_off : Icons.mic, size: 20),
             color: voice.muted ? Colors.redAccent : Colors.white,
             onPressed: voice.toggleMute,
-          ),
+          ).animate().scale(
+                // Pop replayed per toggle via the key above.
+                begin: const Offset(1.3, 1.3),
+                end: const Offset(1, 1),
+                duration: Motion.fast,
+                curve: Motion.spring,
+              ),
           IconButton(
             tooltip: 'Leave voice',
             icon: const Icon(Icons.call_end, size: 20),

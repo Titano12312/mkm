@@ -174,19 +174,34 @@ class _ChatViewState extends State<ChatView> {
                       final m = rows[i];
                       final mine = m.authorId == chat.userId;
                       final isNew = _seenIds.add(m.id);
+                      // Group consecutive messages from the same author
+                      // (<5 min apart): hide the repeated header/avatar.
+                      var grouped = false;
+                      if (i > 0) {
+                        final p = rows[i - 1];
+                        grouped = p.authorId == m.authorId &&
+                            m.createdAt.difference(p.createdAt).inMinutes.abs() < 5;
+                      }
                       final row = _MessageRow(
                         authorName: m.authorName,
                         content: m.content,
                         createdAt: m.createdAt,
                         mine: mine,
+                        compact: grouped,
                       );
                       if (!isNew) return row;
-                      // Entrance, played exactly once per message.
+                      // Entrance, played exactly once per message. Sides match
+                      // the conversation direction (mine right, theirs left).
                       return RepaintBoundary(
                         child: row
                             .animate()
                             .fadeIn(duration: Motion.fast)
-                            .slideY(begin: 0.35, end: 0, duration: Motion.base, curve: Motion.standard),
+                            .slide(
+                              begin: Offset(mine ? 0.25 : -0.25, 0.2),
+                              end: Offset.zero,
+                              duration: Motion.base,
+                              curve: Motion.standard,
+                            ),
                       );
                     },
                   ),
@@ -338,7 +353,53 @@ class _MessageRow extends StatelessWidget {
   final String content;
   final DateTime createdAt;
   final bool mine;
+  final bool compact;
   const _MessageRow({
+    required this.authorName,
+    required this.content,
+    required this.createdAt,
+    required this.mine,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Grouped follow-up: content only, indented to the text column
+    // (avatar 32 + gap 10 = 42).
+    if (compact) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(width: 42),
+            Expanded(
+              child: SelectableText(content,
+                  style: const TextStyle(color: Color(0xFFDBDEE1), fontSize: 14)),
+            ),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: _Body(
+        authorName: authorName,
+        content: content,
+        createdAt: createdAt,
+        mine: mine,
+      ),
+    );
+  }
+}
+
+/// Full message: avatar + name/time header + text.
+class _Body extends StatelessWidget {
+  final String authorName;
+  final String content;
+  final DateTime createdAt;
+  final bool mine;
+  const _Body({
     required this.authorName,
     required this.content,
     required this.createdAt,
@@ -347,42 +408,39 @@ class _MessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: mine ? const Color(0xFF5865F2) : Colors.grey[700],
-            child: Text(authorName.isNotEmpty ? authorName[0].toUpperCase() : '?',
-                style: const TextStyle(color: Colors.white, fontSize: 13)),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CircleAvatar(
+          radius: 16,
+          backgroundColor: mine ? const Color(0xFF5865F2) : Colors.grey[700],
+          child: Text(authorName.isNotEmpty ? authorName[0].toUpperCase() : '?',
+              style: const TextStyle(color: Colors.white, fontSize: 13)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(authorName,
+                      style: TextStyle(
+                          color: mine ? const Color(0xFF949CF7) : Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13)),
+                  const SizedBox(width: 8),
+                  Text(_fmtTime(createdAt),
+                      style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                ],
+              ),
+              const SizedBox(height: 2),
+              SelectableText(content,
+                  style: const TextStyle(color: Color(0xFFDBDEE1), fontSize: 14)),
+            ],
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(authorName,
-                        style: TextStyle(
-                            color: mine ? const Color(0xFF949CF7) : Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13)),
-                    const SizedBox(width: 8),
-                    Text(_fmtTime(createdAt),
-                        style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                SelectableText(content,
-                    style: const TextStyle(color: Color(0xFFDBDEE1), fontSize: 14)),
-              ],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
