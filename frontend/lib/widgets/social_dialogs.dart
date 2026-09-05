@@ -169,9 +169,10 @@ Future<void> showCreateGroupDialog(BuildContext context) async {
                 ? null
                 : () async {
                     setState(() => busy = true);
-                    final id = await ctx
-                        .read<SocketService>()
-                        .createGroup(name.text, selected.toList());
+                    // `chat` was captured before showDialog: route builders
+                    // sit above the providers (same trap as the settings
+                    // sheet), so ctx.read would throw here.
+                    final id = await chat.createGroup(name.text, selected.toList());
                     if (!ctx.mounted) return;
                     Navigator.of(ctx).pop();
                     if (id != null) {

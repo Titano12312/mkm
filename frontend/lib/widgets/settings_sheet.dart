@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import 'user_avatar.dart';
@@ -233,7 +232,14 @@ String _usernameErrorText(String code) {
 }
 
 /// Opens the settings sheet (adaptive: bottom sheet, works both layouts).
+///
+/// NOTE: the sheet content is explicitly re-provided with the service.
+/// Modal routes attach to the MaterialApp Navigator, which sits ABOVE the
+/// providers — reading them from the route builder throws
+/// ProviderNotFoundException (rendered as a blank sheet). Capturing the
+/// instance first and re-providing it is the standard fix.
 Future<void> showSettingsSheet(BuildContext context) {
+  final chat = context.read<SocketService>();
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -241,6 +247,9 @@ Future<void> showSettingsSheet(BuildContext context) {
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
-    builder: (_) => const SettingsSheet(),
+    builder: (_) => ChangeNotifierProvider<SocketService>.value(
+      value: chat,
+      child: const SettingsSheet(),
+    ),
   );
 }
