@@ -44,6 +44,10 @@ class SocketService extends ChangeNotifier {
   String? selfSocketId;
   String? voiceError;
 
+  // -- Own profile (server source of truth; refreshed with social state) ------
+  String? myEmail;
+  String? myAvatarUrl;
+
   // -- Social: friends, DMs, opt-in groups ------------------------------------
   List<SocialUser> friends = [];
   List<SocialUser> pendingIn = [];
@@ -329,6 +333,7 @@ class SocketService extends ChangeNotifier {
 
   Future<void> refreshSocial() async {
     if (!connected) return;
+    await _refreshMyProfile();
     final friendsAck = await _emitAck('friend:list', {});
     if (friendsAck != null && friendsAck['ok'] == true) {
       friends = ((friendsAck['friends'] ?? []) as List)
@@ -442,6 +447,60 @@ class SocketService extends ChangeNotifier {
     if (activeConversationId == conversationId) closeConversation();
     await refreshSocial();
     return ack != null && ack['ok'] == true;
+  }
+
+  // -- Own profile API ----------------------------------------------------------
+
+  Future<void> _refreshMyProfile() async {
+    final ack = await _emitAck('profile:me', {});
+    if (ack == null || ack['ok'] != true || ack['profile'] == null) return;
+    final p = Map<String, dynamic>.from(ack['profile'] as Map);
+    final serverName = ((p['username'] ?? '') as String).trim();
+    if (serverName.isNotEmpty) username = serverName;
+    myEmail = p['email'] as String?;
+    myAvatarUrl = p['avatarUrl'] as String?;
+    notifyListeners();
+  }
+
+  /// Rename. Returns null on success, short error code otherwise.
+  Future<String?> updateUsername(String name) async {
+    final ack = await _emitAck('profile:set-username', {'username': name.trim()});
+    if (ack == null) return 'offline';
+    if (ack['ok'] == true) {
+      // Server also pushes auth:ok + social:refresh; apply immediately too.
+      final fresh = ((ack['username'] ?? '') as String).trim();
+      if (fresh.isNotEmpty) username = fresh;
+      notifyListeners();
+      return null;
+    }
+    return (ack['error'] ?? 'failed') as String;
+  }
+
+  /// Pin an uploaded avatar URL. Returns null on success, error code otherwise.
+  Future<String?> updateAvatarUrl(String url) async {
+    final ack = await _emitAck('profile:set-avatar', {'avatarUrl': url});
+    if (ack == null) return 'offline';
+    if (ack['ok'] == true) {
+      myAvatarUrl = ((ack['avatarUrl'] ?? url) as String);
+      notifyListeners();
+      await refreshSocial();
+      return null;
+    }
+    return (ack['error'] ?? 'failed') as String;
+  }
+
+  /// Avatar lookup for message/friend rows: self → friends → group members.
+  String? avatarFor(String userId) {
+    if (userId == this.userId) return myAvatarUrl;
+    for (final f in friends) {
+      if (f.userId == userId) return f.avatarUrl;
+    }
+    for (final c in conversations) {
+      for (final m in c.members) {
+        if (m.userId == userId) return m.avatarUrl;
+      }
+    }
+    return null;
   }
 
   /// Raw socket access for VoiceService signaling — nothing else should use this.

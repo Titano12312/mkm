@@ -355,6 +355,48 @@ io.on('connection', (socket) => {
     io.to(convRoom(conversationId)).emit('conv:update', { conversationId, members });
   });
 
+  // -- Profile: own row, rename, avatar ---------------------------------------
+  socket.on('profile:me', async (_, ack) => {
+    const me = authed.get(socket.id);
+    if (!me) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'auth-required' });
+      return;
+    }
+    const p = await db.getProfile(me.userId);
+    if (typeof ack === 'function') {
+      ack({
+        ok: true,
+        profile: p
+          ? { userId: p.user_id, username: p.username, email: p.email, avatarUrl: p.avatar_url }
+          : null,
+      });
+    }
+  });
+
+  socket.on('profile:set-username', async ({ username } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.setUsername(me.userId, username);
+    if (res.ok) {
+      // Identity everywhere follows the rename immediately: future
+      // messages, presence, and the client's own display (via auth:ok).
+      authed.set(socket.id, { userId: me.userId, username: res.username });
+      onlineUsers.set(socket.id, { userId: me.userId, username: res.username });
+      io.emit('user:presence', { online: [...onlineUsers.values()] });
+      socket.emit('auth:ok', { userId: me.userId, username: res.username });
+      emitToUser(me.userId, 'social:refresh', {});
+    }
+    if (typeof ack === 'function') ack(res);
+  });
+
+  socket.on('profile:set-avatar', async ({ avatarUrl } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.setAvatarUrl(me.userId, avatarUrl);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) emitToUser(me.userId, 'social:refresh', {});
+  });
+
   // -- Voice channels (click-to-join / click-to-leave) ------------------------
   socket.on('voice:join', async ({ channelId } = {}) => {
     if (!VOICE_IDS.has(channelId)) {

@@ -5,7 +5,9 @@ import '../models/app_models.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../services/voice_service.dart';
+import 'settings_sheet.dart';
 import 'social_dialogs.dart';
+import 'user_avatar.dart';
 
 /// Left channel sidebar (desktop) / drawer content (mobile).
 /// Sections: TEXT CHANNELS (#) and VOICE CHANNELS (🔊 + occupant badge).
@@ -131,6 +133,7 @@ class ChannelSidebar extends StatelessWidget {
                 for (final f in chat.friends)
                   _FriendRow(
                     name: f.username,
+                    avatarUrl: f.avatarUrl,
                     online: f.online,
                     selected: _isDmWith(chat, f.userId),
                     onTap: () async {
@@ -161,6 +164,7 @@ class ChannelSidebar extends StatelessWidget {
                 for (final d in chat.conversations.where((c) => c.kind == 'dm'))
                   _FriendRow(
                     name: d.title(chat.userId),
+                    avatarUrl: chat.avatarFor(d.peerId(chat.userId) ?? ''),
                     online: chat.friends.any(
                         (f) => f.online && d.members.any((m) => m.userId == f.userId)),
                     selected: d.id == chat.activeConversationId,
@@ -207,17 +211,22 @@ class ChannelSidebar extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                CircleAvatar(
+                UserAvatar(
+                  avatarUrl: chat.myAvatarUrl,
+                  username: chat.username,
                   radius: 14,
-                  backgroundColor: const Color(0xFFFF5757),
-                  child: Text(chat.username.isNotEmpty ? chat.username[0].toUpperCase() : '?',
-                      style: const TextStyle(color: Colors.white, fontSize: 12)),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(chat.username,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white, fontSize: 13)),
+                ),
+                IconButton(
+                  tooltip: 'Settings',
+                  icon: const Icon(Icons.settings, size: 18),
+                  color: Colors.white70,
+                  onPressed: () => showSettingsSheet(context),
                 ),
                 if (voice.inCall)
                   IconButton(
@@ -389,10 +398,16 @@ class _SectionHeader extends StatelessWidget {
 
 class _FriendRow extends StatelessWidget {
   final String name;
+  final String? avatarUrl;
   final bool online;
   final bool selected;
   final VoidCallback onTap;
-  const _FriendRow({required this.name, required this.online, required this.selected, required this.onTap});
+  const _FriendRow(
+      {required this.name,
+      this.avatarUrl,
+      required this.online,
+      required this.selected,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -410,6 +425,15 @@ class _FriendRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Row(
                 children: [
+                  UserAvatar(avatarUrl: avatarUrl, username: name, radius: 12),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: selected ? Colors.white : Colors.grey[400], fontSize: 14)),
+                  ),
+                  const SizedBox(width: 6),
                   Container(
                     width: 9,
                     height: 9,
@@ -417,13 +441,6 @@ class _FriendRow extends StatelessWidget {
                       shape: BoxShape.circle,
                       color: online ? Colors.greenAccent : Colors.grey[600],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            color: selected ? Colors.white : Colors.grey[400], fontSize: 14)),
                   ),
                 ],
               ),

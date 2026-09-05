@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../core/motion.dart';
 import '../services/socket_service.dart';
+import 'user_avatar.dart';
 
 /// Message viewport + input box, in two modes:
 /// - channel mode (default): server text channel from the sidebar.
@@ -184,6 +185,7 @@ class _ChatViewState extends State<ChatView> {
                       }
                       final row = _MessageRow(
                         authorName: m.authorName,
+                        avatarUrl: chat.avatarFor(m.authorId),
                         content: m.content,
                         createdAt: m.createdAt,
                         mine: mine,
@@ -350,12 +352,14 @@ class _RowData {
 
 class _MessageRow extends StatelessWidget {
   final String authorName;
+  final String? avatarUrl;
   final String content;
   final DateTime createdAt;
   final bool mine;
   final bool compact;
   const _MessageRow({
     required this.authorName,
+    this.avatarUrl,
     required this.content,
     required this.createdAt,
     required this.mine,
@@ -385,6 +389,7 @@ class _MessageRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: _Body(
         authorName: authorName,
+        avatarUrl: avatarUrl,
         content: content,
         createdAt: createdAt,
         mine: mine,
@@ -396,11 +401,13 @@ class _MessageRow extends StatelessWidget {
 /// Full message: avatar + name/time header + text.
 class _Body extends StatelessWidget {
   final String authorName;
+  final String? avatarUrl;
   final String content;
   final DateTime createdAt;
   final bool mine;
   const _Body({
     required this.authorName,
+    this.avatarUrl,
     required this.content,
     required this.createdAt,
     required this.mine,
@@ -411,11 +418,11 @@ class _Body extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: mine ? const Color(0xFFFF5757) : Colors.grey[700],
-          child: Text(authorName.isNotEmpty ? authorName[0].toUpperCase() : '?',
-              style: const TextStyle(color: Colors.white, fontSize: 13)),
+        UserAvatar(
+          avatarUrl: avatarUrl,
+          username: authorName,
+          radius: 16,
+          fallbackColor: mine ? const Color(0xFFFF5757) : Colors.grey.shade700,
         ),
         const SizedBox(width: 10),
         Expanded(

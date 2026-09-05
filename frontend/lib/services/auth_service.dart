@@ -27,9 +27,14 @@ class AuthService {
   /// Email sign-up. Returns null on success, a friendly message otherwise.
   /// Note: with "Confirm email" ON (dashboard default), the user must click
   /// the inbox link before sign-in works — surfaced as email-not-confirmed.
-  static Future<String?> signUpWithEmail(String email, String password) async {
+  static Future<String?> signUpWithEmail(String email, String password, {String? username}) async {
     try {
-      final res = await client.auth.signUp(email: email.trim(), password: password);
+      final res = await client.auth.signUp(
+        email: email.trim(),
+        password: password,
+        // Claimed server-side (unique-checked); echoed back for display.
+        data: username != null && username.trim().isNotEmpty ? {'username': username.trim()} : null,
+      );
       // No session + identities empty = existing user re-registering; treat
       // as sign-in hint, not success (avoids account-enumeration ambiguity).
       if (res.session == null && (res.user?.identities?.isEmpty ?? true)) {
@@ -89,9 +94,34 @@ class AuthService {
 
   static Future<void> signOut() => client.auth.signOut();
 
-  /// Best display name: full name → email handle → fallback.
+  /// Username rules, mirrored server-side (server re-validates, never trusts).
+  static bool validUsername(String name) =>
+      RegExp(r'^[a-zA-Z0-9_]{2,24}$').hasMatch(name.trim());
+
+  /// Availability probe for the signup form. Reads the anon-readable
+  /// profiles (no session yet) — the server still re-checks at claim time
+  /// to close the race. Returns null when unavailable/unknown (fail open:
+  /// signup surfaces the authoritative error).
+  static Future<bool?> checkUsernameAvailable(String name) async {
+    final clean = name.trim();
+    if (!validUsername(clean)) return false;
+    try {
+      final rows = await client
+          .from('profiles')
+          .select('user_id')
+          .ilike('username', clean)
+          .limit(1);
+      return (rows as List).isEmpty;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Best display name: chosen username → full name → email handle.
   static String displayName(User user) {
     final meta = user.userMetadata ?? const <String, dynamic>{};
+    final chosen = ((meta['username'] ?? '') as String).trim();
+    if (validUsername(chosen)) return chosen;
     final full = ((meta['full_name'] ?? meta['name'] ?? '') as String).trim();
     if (full.isNotEmpty) return full.substring(0, full.length > 32 ? 32 : full.length);
     final email = user.email ?? '';

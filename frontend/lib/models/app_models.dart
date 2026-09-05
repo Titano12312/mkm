@@ -55,13 +55,15 @@ class SocialUser {
   final String userId;
   final String username;
   final String? email;
+  final String? avatarUrl;
   final bool online;
-  const SocialUser({required this.userId, required this.username, this.email, this.online = false});
+  const SocialUser({required this.userId, required this.username, this.email, this.avatarUrl, this.online = false});
 
   factory SocialUser.fromJson(Map<String, dynamic> j) => SocialUser(
         userId: j['userId'] as String,
         username: (j['username'] ?? 'Unknown') as String,
         email: j['email'] as String?,
+        avatarUrl: j['avatarUrl'] as String?,
         online: (j['online'] ?? false) as bool,
       );
 }
@@ -69,11 +71,13 @@ class SocialUser {
 class ConversationMember {
   final String userId;
   final String username;
-  const ConversationMember({required this.userId, required this.username});
+  final String? avatarUrl;
+  const ConversationMember({required this.userId, required this.username, this.avatarUrl});
 
   factory ConversationMember.fromJson(Map<String, dynamic> j) => ConversationMember(
         userId: j['userId'] as String,
         username: (j['username'] ?? 'Unknown') as String,
+        avatarUrl: j['avatarUrl'] as String?,
       );
 }
 
@@ -101,6 +105,15 @@ class Conversation {
       if (m.userId != selfUserId) return m.username;
     }
     return 'Direct message';
+  }
+
+  /// The other member's id for DMs (null for groups/solo).
+  String? peerId(String selfUserId) {
+    if (kind != 'dm') return null;
+    for (final m in members) {
+      if (m.userId != selfUserId) return m.userId;
+    }
+    return null;
   }
 }
 

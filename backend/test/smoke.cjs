@@ -35,32 +35,37 @@ x.on('voice:error', (d) => {
   voiceError = d;
 });
 x.on('connect', () => {
-  x.emit(
-    'message:send',
-    { channelId: 'general', authorId: 'spoof', authorName: 'Spoof', content: 'nope' },
-    (ack) => {
-      ok('unauth message:send rejected', ack && ack.ok === false);
-      x.emit('friend:request', { email: 'nobody@example.com' }, (ack2) => {
-        ok('unauth friend:request rejected', ack2 && ack2.ok === false);
-        x.emit('conv:send', { conversationId: '00000000-0000-0000-0000-000000000000', content: 'nope' }, (ack3) => {
-          ok('unauth conv:send rejected', ack3 && ack3.ok === false);
-          x.emit('group:create', { name: 'nope', memberIds: [] }, (ack4) => {
-            ok('unauth group:create rejected', ack4 && ack4.ok === false);
-            x.emit('voice:join', { channelId: 'lounge', userId: 'spoof', username: 'Spoof' });
-            setTimeout(() => {
-              ok('unauth voice:join rejected', !voiceJoined && !!voiceError);
-              x.disconnect();
-              if (JWT) phase2();
-              else {
-                clearTimeout(timeout);
-                finish();
-              }
-            }, 800);
-          });
-        });
-      });
-    },
-  );
+  // Every write/guarded read without a token must be rejected.
+  const cases = [
+    ['message:send', { channelId: 'general', content: 'nope' }, 'unauth message:send rejected'],
+    ['friend:request', { username: 'nope' }, 'unauth friend:request rejected'],
+    ['conv:send', { conversationId: '00000000-0000-0000-0000-000000000000', content: 'nope' }, 'unauth conv:send rejected'],
+    ['group:create', { name: 'nope', memberIds: [] }, 'unauth group:create rejected'],
+    ['profile:set-username', { username: 'spoof' }, 'unauth profile:set-username rejected'],
+    ['profile:set-avatar', { avatarUrl: 'https://x/y.jpg' }, 'unauth profile:set-avatar rejected'],
+    ['profile:me', {}, 'unauth profile:me rejected'],
+  ];
+  const runCase = (i) => {
+    if (i >= cases.length) {
+      x.emit('voice:join', { channelId: 'lounge' });
+      setTimeout(() => {
+        ok('unauth voice:join rejected', !voiceJoined && !!voiceError);
+        x.disconnect();
+        if (JWT) phase2();
+        else {
+          clearTimeout(timeout);
+          finish();
+        }
+      }, 800);
+      return;
+    }
+    const [event, payload, name] = cases[i];
+    x.emit(event, payload, (ack) => {
+      ok(name, ack && ack.ok === false);
+      runCase(i + 1);
+    });
+  };
+  runCase(0);
 });
 
 // --- Phase 2: authed roundtrip (needs a real Supabase access token) ----------

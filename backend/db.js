@@ -54,15 +54,24 @@ async function verifyToken(token) {
     return null;
   }
   const u = data.user;
+  const existing = await getProfile(u.id);
+  if (existing) {
+    // Preserve the user's chosen username/avatar; refresh presence data.
+    // (Without this, every login would overwrite settings changes.)
+    await supabase
+      .from('profiles')
+      .update({ last_seen: new Date().toISOString(), email: u.email || existing.email })
+      .eq('user_id', u.id);
+    return { userId: u.id, username: existing.username };
+  }
   const meta = u.user_metadata || {};
-  const base = String(
-    meta.full_name || meta.name || (u.email || '').split('@')[0] || 'Friend',
-  ).replace(/\s+/g, '_').slice(0, 24) || 'Friend';
-  // Usernames double as friend-invite handles, so they must be unique.
-  // First login claims the base name; collisions get _1, _2, … (stable:
-  // your own row is excluded, so names never shift under you).
+  const raw = String(
+    meta.username || meta.full_name || meta.name || (u.email || '').split('@')[0] || 'Friend',
+  );
+  let base = raw.replace(/\s+/g, '_').slice(0, 24);
+  if (!validUsername(base)) base = 'Friend';
   const username = await ensureUniqueUsername(base, u.id);
-  await upsertProfile({ userId: u.id, username, email: u.email || null });
+  await supabase.from('profiles').insert({ user_id: u.id, username, email: u.email || null });
   return { userId: u.id, username };
 }
 
@@ -139,13 +148,56 @@ async function saveMessage(msg) {
   return true;
 }
 
-/** Upsert profile on every `user:online` (also refreshes last_seen). */
-async function upsertProfile({ userId, username, email = null }) {
-  if (!supabase) return;
-  const row = { user_id: userId, username, last_seen: new Date().toISOString() };
-  if (email) row.email = email;
-  const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'user_id' });
-  if (error) console.warn('[db] upsertProfile failed:', error.message);
+/** Single profile row (username, email, avatar) or null. */
+async function getProfile(userId) {
+  if (!supabase || !userId) return null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('user_id,username,email,avatar_url')
+    .eq('user_id', userId)
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  return data[0];
+}
+
+/** Username rules, enforced server-side (client validates too, never trusted). */
+function validUsername(name) {
+  return typeof name === 'string' && /^[a-zA-Z0-9_]{2,24}$/.test(name.trim());
+}
+
+/** Rename Guard: format + global uniqueness (self excluded). */
+async function setUsername(userId, username) {
+  if (!supabase) return { ok: false, error: 'db-unavailable' };
+  const clean = String(username || '').trim();
+  if (!validUsername(clean)) return { ok: false, error: 'invalid' };
+  const clash = await findUserByUsername(clean);
+  if (clash && clash.user_id !== userId) return { ok: false, error: 'taken' };
+  const { error } = await supabase.from('profiles').update({ username: clean }).eq('user_id', userId);
+  if (error) {
+    console.warn('[db] setUsername failed:', error.message);
+    return { ok: false, error: 'db-error' };
+  }
+  return { ok: true, username: clean };
+}
+
+/**
+ * Avatar Guard: only https URLs inside the caller's own avatars/ folder.
+ * The binary itself is uploaded by the app straight to Supabase Storage
+ * (owner-only RLS); the server just pins a safe URL to the profile.
+ */
+async function setAvatarUrl(userId, url) {
+  if (!supabase) return { ok: false, error: 'db-unavailable' };
+  const clean = String(url || '').trim().slice(0, 500);
+  const prefix = `${process.env.SUPABASE_URL}/storage/v1/object/public/avatars/${userId}/`;
+  if (!clean.startsWith('https://') || !clean.startsWith(prefix)) {
+    return { ok: false, error: 'invalid' };
+  }
+  const { error } = await supabase.from('profiles').update({ avatar_url: clean }).eq('user_id', userId);
+  if (error) {
+    console.warn('[db] setAvatarUrl failed:', error.message);
+    return { ok: false, error: 'db-error' };
+  }
+  return { ok: true, avatarUrl: clean };
 }
 
 /**
@@ -209,7 +261,7 @@ async function findUserByUsername(username) {
 
 async function getProfiles(userIds) {
   if (!supabase || userIds.length === 0) return new Map();
-  const { data, error } = await supabase.from('profiles').select('user_id,username,email').in('user_id', userIds);
+  const { data, error } = await supabase.from('profiles').select('user_id,username,email,avatar_url').in('user_id', userIds);
   if (error) {
     console.warn('[db] getProfiles failed:', error.message);
     return new Map();
@@ -308,7 +360,12 @@ async function listSocial(userId) {
   const profiles = await getProfiles([...new Set([...friendIds, ...outIds, ...inIds])]);
   const shape = (id) => {
     const p = profiles.get(id);
-    return { userId: id, username: (p && p.username) || 'Unknown', email: (p && p.email) || null };
+    return {
+      userId: id,
+      username: (p && p.username) || 'Unknown',
+      email: (p && p.email) || null,
+      avatarUrl: (p && p.avatar_url) || null,
+    };
   };
   return {
     friends: friendIds.map(shape),
@@ -354,7 +411,7 @@ async function getMembers(conversationId) {
   const profiles = await getProfiles(ids);
   return ids.map((id) => {
     const p = profiles.get(id);
-    return { userId: id, username: (p && p.username) || 'Unknown' };
+    return { userId: id, username: (p && p.username) || 'Unknown', avatarUrl: (p && p.avatar_url) || null };
   });
 }
 
@@ -456,10 +513,13 @@ module.exports = {
   loadChannels,
   getHistory,
   saveMessage,
-  upsertProfile,
   logVoiceJoin,
   logVoiceLeave,
   verifyToken,
+  getProfile,
+  validUsername,
+  setUsername,
+  setAvatarUrl,
   findUserByUsername,
   requestFriend,
   acceptFriend,

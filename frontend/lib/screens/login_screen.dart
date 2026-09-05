@@ -17,11 +17,17 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _username = TextEditingController();
 
   Future<void> _submitEmail() async {
     final email = _email.text.trim();
+    final username = _username.text.trim();
     if (!email.contains('@') || _password.text.length < 6) {
       setState(() => _error = 'Enter a valid email and a 6+ character password.');
+      return;
+    }
+    if (_signupMode && !AuthService.validUsername(username)) {
+      setState(() => _error = 'Username: 2–24 letters, numbers or underscores.');
       return;
     }
     setState(() {
@@ -29,8 +35,21 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
+      if (_signupMode) {
+        // Fail fast on taken names (server re-checks at claim time anyway).
+        final free = await AuthService.checkUsernameAvailable(username);
+        if (free == false) {
+          if (mounted) {
+            setState(() {
+              _error = 'That username is taken — try another.';
+              _busy = false;
+            });
+          }
+          return;
+        }
+      }
       final err = _signupMode
-          ? await AuthService.signUpWithEmail(email, _password.text)
+          ? await AuthService.signUpWithEmail(email, _password.text, username: username)
           : await AuthService.signInWithEmail(email, _password.text);
       // Success needs no navigation: the auth-state stream flips and
       // AuthGate swaps to the chat shell by itself.
@@ -44,6 +63,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _username.dispose();
     super.dispose();
   }
 
@@ -120,6 +140,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       onSubmitted: (_) => _submitEmail(),
                     ),
                   ),
+                  if (_signupMode) ...[
+                    const SizedBox(height: 10),
+                    _Stagger(
+                      delay: 3,
+                      reduce: reduce,
+                      child: _DarkField(
+                        controller: _username,
+                        hint: 'Choose a username',
+                        onSubmitted: (_) => _submitEmail(),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   _Stagger(
                     delay: 4,
