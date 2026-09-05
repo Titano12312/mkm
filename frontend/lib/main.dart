@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'services/auth_service.dart';
+import 'services/call_service.dart';
 import 'services/socket_service.dart';
 import 'services/voice_service.dart';
 import 'screens/login_screen.dart';
+import 'widgets/call_overlay.dart';
 import 'widgets/channel_sidebar.dart';
 import 'widgets/chat_view.dart';
 import 'widgets/home_empty.dart';
@@ -105,6 +107,10 @@ class _SessionShellState extends State<SessionShell> {
           create: (ctx) => VoiceService(ctx.read<SocketService>()),
           update: (_, signaling, prev) => prev ?? VoiceService(signaling),
         ),
+        ChangeNotifierProxyProvider<SocketService, CallService>(
+          create: (ctx) => CallService(ctx.read<SocketService>()),
+          update: (_, signaling, prev) => prev ?? CallService(signaling),
+        ),
       ],
       child: const _Connector(),
     );
@@ -129,7 +135,15 @@ class _ConnectorState extends State<_Connector> {
   }
 
   @override
-  Widget build(BuildContext context) => const HomeShell();
+  Widget build(BuildContext context) {
+    // Call overlay floats above the shell on both layouts.
+    return const Stack(
+      children: [
+        HomeShell(),
+        CallOverlayHost(),
+      ],
+    );
+  }
 }
 
 class HomeShell extends StatelessWidget {
@@ -200,13 +214,6 @@ class MobileLayout extends StatelessWidget {
           chat.conversationById(chat.activeConversationId)?.title(chat.userId) ??
               (chat.activeTextChannelId != null ? '# ${chat.activeTextChannelId}' : 'TellAviv'),
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Mute / unmute',
-            icon: Icon(context.watch<VoiceService>().muted ? Icons.mic_off : Icons.mic),
-            onPressed: context.read<VoiceService>().toggleMute,
-          ),
-        ],
       ),
       drawer: Drawer(
         width: 300,

@@ -23,6 +23,11 @@ class VoiceService extends ChangeNotifier {
   bool muted = false;
   bool inCall = false;
 
+  /// Armed only inside a channel join. The generic webrtc:* relay is shared
+  /// with CallService (1:1 calls) — without this guard the voice service
+  /// would answer call offers meant for the other service.
+  bool _armed = false;
+
   static const _rtcConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -45,16 +50,19 @@ class VoiceService extends ChangeNotifier {
     });
 
     s.on('webrtc:offer', (data) async {
+      if (!_armed) return;
       final m = Map<String, dynamic>.from(data as Map);
       await _onOffer(m['fromSocketId'] as String, m['sdp']);
     });
     s.on('webrtc:answer', (data) async {
+      if (!_armed) return;
       final m = Map<String, dynamic>.from(data as Map);
       await _peers[m['fromSocketId']]?.setRemoteDescription(
         RTCSessionDescription(m['sdp']['sdp'], m['sdp']['type']),
       );
     });
     s.on('webrtc:ice-candidate', (data) async {
+      if (!_armed) return;
       final m = Map<String, dynamic>.from(data as Map);
       final c = Map<String, dynamic>.from(m['candidate']);
       await _peers[m['fromSocketId']]?.addCandidate(
@@ -106,6 +114,7 @@ class VoiceService extends ChangeNotifier {
   Future<void> join(String channelId) async {
     signaling.setVoiceError(null);
     await _ensureHandlers();
+    _armed = true;
     try {
       _localStream ??= await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
     } catch (_) {
@@ -169,6 +178,7 @@ class VoiceService extends ChangeNotifier {
   }
 
   Future<void> leave() async {
+    _armed = false;
     signaling.setVoiceError(null);
     signaling.rawSocket?.emit('voice:leave', {});
     for (final id in _peers.keys.toList()) {
@@ -197,6 +207,7 @@ class VoiceService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _armed = false;
     for (final pc in _peers.values) {
       pc.close();
     }

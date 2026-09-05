@@ -46,6 +46,7 @@ const convHistory = new Map(); // conversationId -> Array<message>
 const convRoom = (id) => `conv:${id}`;
 const onlineUsers = new Map(); // socketId -> { userId, username }
 const authed = new Map(); // socketId -> { userId, username } verified via Supabase JWT
+const calls = new Map(); // callId -> { callerSocketId, callerUserId, callerUsername, calleeUserId, calleeSocketId?, state }
 const voiceRooms = new Map(); // voiceChannelId -> Map<socketId, { userId, username }>
 const socketVoiceChannel = new Map(); // socketId -> { channelId, ready: Promise<sessionId|null> }
 
@@ -448,6 +449,101 @@ io.on('connection', (socket) => {
     io.to(targetSocketId).emit('webrtc:ice-candidate', { fromSocketId: socket.id, candidate });
   });
 
+  // -- 1:1 calls (audio): invite → accept/decline → P2P via generic webrtc relay.
+  // Unlike voice rooms (click-to-join, no ringing), a DM call rings the
+  // callee on every online device; first accept wins, the rest are cancelled.
+  const callRoom = (id) => `call:${id}`;
+  const RING_TIMEOUT_MS = 45000;
+
+  function endCall(callId, reason) {
+    const c = calls.get(callId);
+    if (!c) return;
+    calls.delete(callId);
+    io.to(callRoom(callId)).emit('call:ended', { callId, reason });
+  }
+
+  socket.on('call:invite', async ({ targetUserId } = {}, ack) => {
+    const fail = (error) => {
+      if (typeof ack === 'function') ack({ ok: false, error });
+    };
+    const me = authed.get(socket.id);
+    if (!me) return fail('auth-required');
+    if (!targetUserId || targetUserId === me.userId) return fail('invalid');
+    if (!(await db.areFriends(me.userId, targetUserId))) return fail('not-friends');
+    // One outgoing call at a time: end the previous one first.
+    for (const [id, c] of calls) {
+      if (c.callerSocketId === socket.id && c.state !== 'ended') endCall(id, 'replaced');
+    }
+    const callId = `${Date.now()}-${socket.id.slice(0, 6)}`;
+    calls.set(callId, {
+      callerSocketId: socket.id,
+      callerUserId: me.userId,
+      callerUsername: me.username,
+      calleeUserId: targetUserId,
+      state: 'ringing',
+    });
+    emitToUser(targetUserId, 'call:incoming', {
+      callId,
+      fromUserId: me.userId,
+      fromUsername: me.username,
+    });
+    if (typeof ack === 'function') ack({ ok: true, callId });
+    setTimeout(() => {
+      const c = calls.get(callId);
+      if (c && c.state === 'ringing') endCall(callId, 'missed');
+    }, RING_TIMEOUT_MS);
+  });
+
+  socket.on('call:accept', ({ callId } = {}, ack) => {
+    const fail = (error) => {
+      if (typeof ack === 'function') ack({ ok: false, error });
+    };
+    const me = authed.get(socket.id);
+    const c = calls.get(callId);
+    if (!me || !c || c.state !== 'ringing' || c.calleeUserId !== me.userId) {
+      return fail('invalid');
+    }
+    c.state = 'active';
+    c.calleeSocketId = socket.id;
+    // Callee's other devices: stop ringing them.
+    emitToUser(c.calleeUserId, 'call:cancelled', { callId });
+    socket.join(callRoom(callId));
+    const caller = io.sockets.sockets.get(c.callerSocketId);
+    if (caller) caller.join(callRoom(callId));
+    // Both sides learn each other's socket for direct P2P negotiation.
+    // Caller initiates the offer (Discord-style: the dialer starts).
+    io.to(c.callerSocketId).emit('call:accepted', {
+      callId,
+      peerSocketId: socket.id,
+      peerUserId: me.userId,
+      peerUsername: me.username,
+      initiator: true,
+    });
+    socket.emit('call:accepted', {
+      callId,
+      peerSocketId: c.callerSocketId,
+      peerUserId: c.callerUserId,
+      peerUsername: c.callerUsername || 'Friend',
+      initiator: false,
+    });
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+
+  socket.on('call:decline', ({ callId } = {}) => {
+    const me = authed.get(socket.id);
+    const c = calls.get(callId);
+    if (!me || !c || c.calleeUserId !== me.userId) return;
+    endCall(callId, 'declined');
+  });
+
+  socket.on('call:end', ({ callId } = {}) => {
+    const me = authed.get(socket.id);
+    const c = calls.get(callId);
+    if (!me || !c) return;
+    if (c.callerUserId !== me.userId && c.calleeUserId !== me.userId) return;
+    endCall(callId, 'ended');
+  });
+
   // -- Typing indicators (ephemeral: broadcast only, never persisted) --------
   // Powers the "X is typing…" row in channels AND conversations.
   // Authed-only so names can't be spoofed.
@@ -474,6 +570,12 @@ io.on('connection', (socket) => {
     console.log(`[-] disconnected ${socket.id}`);
     onlineUsers.delete(socket.id);
     authed.delete(socket.id);
+    // Hang up any call this socket was part of so the peer isn't left ringing.
+    for (const [id, c] of [...calls]) {
+      if (c.callerSocketId === socket.id || c.calleeSocketId === socket.id) {
+        endCall(id, 'ended');
+      }
+    }
     io.emit('user:presence', { online: [...onlineUsers.values()] });
     leaveVoice(io, socket);
   });

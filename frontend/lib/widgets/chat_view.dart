@@ -5,6 +5,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../core/motion.dart';
+import '../services/call_service.dart';
 import '../services/socket_service.dart';
 import 'user_avatar.dart';
 
@@ -148,6 +149,22 @@ class _ChatViewState extends State<ChatView> {
                   ),
                 ),
               ),
+              if (inConversation && conv.kind == 'dm')
+                IconButton(
+                  tooltip: 'Voice call',
+                  icon: const Icon(Icons.call, size: 20),
+                  color: Colors.greenAccent,
+                  onPressed: () async {
+                    final peer = conv.peerId(chat.userId);
+                    if (peer == null) return;
+                    final err = await context.read<CallService>().invite(peer);
+                    if (err != null && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Could not start call ($err).')),
+                      );
+                    }
+                  },
+                ),
               if (inConversation && conv.kind == 'group')
                 IconButton(
                   tooltip: 'Leave group',
@@ -227,7 +244,7 @@ class _ChatViewState extends State<ChatView> {
                         child: Text(
                           '${typing.join(', ')} ${typing.length == 1 ? 'is' : 'are'} typing…',
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                          style: const TextStyle(color: Colors.grey, fontSize: 13),
                         ),
                       ),
                     ],
@@ -242,7 +259,7 @@ class _ChatViewState extends State<ChatView> {
             controller: _input,
             minLines: 1,
             maxLines: 4,
-            style: const TextStyle(color: Colors.white),
+            style: const TextStyle(color: Colors.white, fontSize: 16),
             decoration: InputDecoration(
               hintText: 'Message $title',
               hintStyle: const TextStyle(color: Colors.grey),
@@ -379,7 +396,7 @@ class _MessageRow extends StatelessWidget {
             const SizedBox(width: 42),
             Expanded(
               child: SelectableText(content,
-                  style: const TextStyle(color: Color(0xFFDBDEE1), fontSize: 14)),
+                  style: const TextStyle(color: Color(0xFFDBDEE1), fontSize: 17)),
             ),
           ],
         ),
@@ -435,10 +452,10 @@ class _Body extends StatelessWidget {
                         style: TextStyle(
                             color: mine ? const Color(0xFFFF9E9E) : Colors.white,
                             fontWeight: FontWeight.bold,
-                            fontSize: 13)),
-                  const SizedBox(width: 8),
-                  Text(_fmtTime(createdAt),
-                      style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                            fontSize: 15)),
+                    const SizedBox(width: 8),
+                    Text(_fmtTime(createdAt),
+                        style: const TextStyle(color: Colors.grey, fontSize: 12)),
                 ],
               ),
               const SizedBox(height: 2),

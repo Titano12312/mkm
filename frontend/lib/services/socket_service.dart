@@ -449,6 +449,22 @@ class SocketService extends ChangeNotifier {
     return ack != null && ack['ok'] == true;
   }
 
+  // -- 1:1 call signaling passthrough (state lives in CallService) ------------
+  // Invite is acked (needs the callId); accept/decline/end are fire-and-
+  // forget — the server answers with call:accepted/cancelled/ended events.
+
+  Future<Map<String, dynamic>?> callInvite(String targetUserId) =>
+      _emitAck('call:invite', {'targetUserId': targetUserId});
+
+  void callAccept(String callId) =>
+      _socket?.emit('call:accept', {'callId': callId});
+
+  void callDecline(String callId) =>
+      _socket?.emit('call:decline', {'callId': callId});
+
+  void callEnd(String callId) =>
+      _socket?.emit('call:end', {'callId': callId});
+
   // -- Own profile API ----------------------------------------------------------
 
   Future<void> _refreshMyProfile() async {

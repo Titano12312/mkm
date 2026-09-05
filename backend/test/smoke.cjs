@@ -44,6 +44,8 @@ x.on('connect', () => {
     ['profile:set-username', { username: 'spoof' }, 'unauth profile:set-username rejected'],
     ['profile:set-avatar', { avatarUrl: 'https://x/y.jpg' }, 'unauth profile:set-avatar rejected'],
     ['profile:me', {}, 'unauth profile:me rejected'],
+    ['call:invite', { targetUserId: 'nobody' }, 'unauth call:invite rejected'],
+    ['call:accept', { callId: 'nope' }, 'unauth call:accept rejected'],
   ];
   const runCase = (i) => {
     if (i >= cases.length) {
