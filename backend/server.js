@@ -214,10 +214,10 @@ io.on('connection', (socket) => {
     }
   };
 
-  socket.on('friend:request', async ({ email } = {}, ack) => {
+  socket.on('friend:request', async ({ username } = {}, ack) => {
     const me = requireAuth(ack);
     if (!me) return;
-    const res = await db.requestFriend(me.userId, email);
+    const res = await db.requestFriend(me.userId, username);
     if (typeof ack === 'function') ack(res);
     if (res.ok && res.target) emitToUser(res.target.user_id, 'social:refresh', {});
   });

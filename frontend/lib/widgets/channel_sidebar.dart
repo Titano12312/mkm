@@ -146,7 +146,7 @@ class ChannelSidebar extends StatelessWidget {
                 if (chat.friends.isEmpty && chat.pendingIn.isEmpty)
                   const Padding(
                     padding: EdgeInsets.fromLTRB(16, 2, 16, 4),
-                    child: Text('No friends yet — tap + to add by email.',
+                    child: Text('No friends yet — tap + to add by username.',
                         style: TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
                 if (chat.pendingOut.isNotEmpty)

@@ -55,11 +55,27 @@ async function verifyToken(token) {
   }
   const u = data.user;
   const meta = u.user_metadata || {};
-  const username = String(
-    meta.full_name || meta.name || (u.email || '').split('@')[0] || 'Unknown',
-  ).slice(0, 32);
+  const base = String(
+    meta.full_name || meta.name || (u.email || '').split('@')[0] || 'Friend',
+  ).replace(/\s+/g, '_').slice(0, 24) || 'Friend';
+  // Usernames double as friend-invite handles, so they must be unique.
+  // First login claims the base name; collisions get _1, _2, … (stable:
+  // your own row is excluded, so names never shift under you).
+  const username = await ensureUniqueUsername(base, u.id);
   await upsertProfile({ userId: u.id, username, email: u.email || null });
   return { userId: u.id, username };
+}
+
+/** First free name for base: base, base_1, base_2, … (self excluded). */
+async function ensureUniqueUsername(base, selfId) {
+  const { data } = await supabase.from('profiles').select('user_id,username');
+  const taken = new Set((data || []).filter((p) => p.user_id !== selfId).map((p) => p.username));
+  if (!taken.has(base)) return base;
+  for (let n = 1; n < 10000; n++) {
+    const candidate = `${base}_${n}`.slice(0, 32);
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}_${selfId.slice(0, 4)}`.slice(0, 32);
 }
 
 function fromRow(r) {
@@ -179,13 +195,13 @@ async function logVoiceLeave(sessionId) {
   if (error) console.warn('[db] logVoiceLeave failed:', error.message);
 }
 
-/** Find a user by email (case-insensitive) for friend requests. */
-async function findUserByEmail(email) {
-  if (!supabase || !email) return null;
+/** Find a user by username (case-insensitive) for friend requests. */
+async function findUserByUsername(username) {
+  if (!supabase || !username) return null;
   const { data, error } = await supabase
     .from('profiles')
     .select('user_id,username,email')
-    .ilike('email', String(email).trim())
+    .ilike('username', String(username).trim())
     .limit(1);
   if (error || !data || data.length === 0) return null;
   return data[0];
@@ -202,9 +218,9 @@ async function getProfiles(userIds) {
 }
 
 /** Send a friend request. Returns { ok, error?, target? }. */
-async function requestFriend(requesterId, targetEmail) {
+async function requestFriend(requesterId, targetUsername) {
   if (!supabase) return { ok: false, error: 'db-unavailable' };
-  const target = await findUserByEmail(targetEmail);
+  const target = await findUserByUsername(targetUsername);
   if (!target) return { ok: false, error: 'not-found' };
   if (target.user_id === requesterId) return { ok: false, error: 'self' };
   const { data: existing } = await supabase
@@ -444,7 +460,7 @@ module.exports = {
   logVoiceJoin,
   logVoiceLeave,
   verifyToken,
-  findUserByEmail,
+  findUserByUsername,
   requestFriend,
   acceptFriend,
   declineFriend,

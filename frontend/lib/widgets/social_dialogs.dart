@@ -6,20 +6,20 @@ import '../services/socket_service.dart';
 /// Shared social dialogs (used by the sidebar AND the empty home).
 /// Single intent per dialog; errors inline under the field.
 
-/// Add-friend dialog: invite by the exact email they signed up with.
+/// Add-friend dialog: invite by username (unique per account).
 Future<void> showAddFriendDialog(BuildContext context) async {
-  final email = TextEditingController();
+  final username = TextEditingController();
   String? error;
   bool busy = false;
   final chat = context.read<SocketService>();
 
   Future<void> doSend(StateSetter setState, BuildContext ctx) async {
-    if (busy || email.text.trim().isEmpty) return;
+    if (busy || username.text.trim().isEmpty) return;
     setState(() {
       busy = true;
       error = null;
     });
-    final err = await chat.sendFriendRequest(email.text);
+    final err = await chat.sendFriendRequest(username.text);
     if (!ctx.mounted) return;
     if (err == null) {
       Navigator.of(ctx).pop();
@@ -44,15 +44,15 @@ Future<void> showAddFriendDialog(BuildContext context) async {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Their signup email:', style: TextStyle(color: Colors.grey, fontSize: 12)),
+            const Text('Their username:', style: TextStyle(color: Colors.grey, fontSize: 12)),
             const SizedBox(height: 8),
             TextField(
-              controller: email,
-              keyboardType: TextInputType.emailAddress,
+              controller: username,
+              keyboardType: TextInputType.text,
               autocorrect: false,
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: 'friend@example.com',
+                hintText: 'marco_1',
                 hintStyle: const TextStyle(color: Colors.grey),
                 filled: true,
                 fillColor: const Color(0xFF1E1F22),
@@ -78,15 +78,15 @@ Future<void> showAddFriendDialog(BuildContext context) async {
       ),
     ),
   );
-  email.dispose();
+  username.dispose();
 }
 
 String _friendErrorText(String code) {
   switch (code) {
     case 'not-found':
-      return 'No account with that email yet.';
+      return 'No user with that username yet.';
     case 'self':
-      return 'That is your own email.';
+      return 'That is your own username.';
     case 'already-friends':
       return 'You are already friends.';
     case 'already-pending':

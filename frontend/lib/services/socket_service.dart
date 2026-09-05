@@ -99,9 +99,16 @@ class SocketService extends ChangeNotifier {
       notifyListeners();
     });
 
-    socket.on('auth:ok', (_) {
+    socket.on('auth:ok', (data) {
       authed = true;
       authError = null;
+      try {
+        final m = Map<String, dynamic>.from(data as Map);
+        final serverName = ((m['username'] ?? '') as String).trim();
+        // Server is the source of truth for names (dedup suffixes live
+        // there), so the sidebar never shows a stale local guess.
+        if (serverName.isNotEmpty) username = serverName;
+      } catch (_) {}
       notifyListeners();
       // Pull social state on every (re-)auth: friends, requests, DMs.
       refreshSocial();
@@ -344,8 +351,8 @@ class SocketService extends ChangeNotifier {
   }
 
   /// Returns null on success, otherwise a short error code for the dialog.
-  Future<String?> sendFriendRequest(String email) async {
-    final ack = await _emitAck('friend:request', {'email': email.trim()});
+  Future<String?> sendFriendRequest(String username) async {
+    final ack = await _emitAck('friend:request', {'username': username.trim()});
     if (ack == null) return 'offline';
     if (ack['ok'] == true) {
       await refreshSocial();
