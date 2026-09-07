@@ -21,7 +21,8 @@ Push-Location (Join-Path $PSScriptRoot '..\frontend')
 try {
   flutter config --enable-windows-desktop
   flutter pub get
-  flutter build windows --release --dart-define=API_URL=$ApiUrl
+  $buildTime = Get-Date -Format 'yyyy-MM-dd HH:mm'
+  flutter build windows --release --dart-define=API_URL=$ApiUrl --dart-define=BUILD_TIME=$buildTime
   Write-Host 'Windows release: build\windows\x64\runner\Release\' -ForegroundColor Green
   Write-Host 'Next: iscc installer\tellaviv.iss' -ForegroundColor Cyan
 } finally {

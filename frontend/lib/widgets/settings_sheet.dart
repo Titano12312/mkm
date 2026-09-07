@@ -6,6 +6,10 @@ import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import 'user_avatar.dart';
 
+/// Build stamp baked at compile time (--dart-define=BUILD_TIME=...).
+/// Lets anyone confirm which build is installed (kills "old build" bugs).
+const buildTime = String.fromEnvironment('BUILD_TIME', defaultValue: 'dev');
+
 /// Settings sheet: avatar photo, username rename, account email.
 /// Opened from the gear icon in the sidebar user strip.
 class SettingsSheet extends StatefulWidget {
@@ -211,6 +215,11 @@ class _SettingsSheetState extends State<SettingsSheet> {
               const SizedBox(height: 8),
               Text(_error!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
             ],
+            const SizedBox(height: 16),
+            const Center(
+              child: Text('TellAviv v0.1.1 • build $buildTime',
+                  style: TextStyle(color: Colors.grey, fontSize: 11)),
+            ),
           ],
         ),
       ),

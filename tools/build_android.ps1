@@ -17,12 +17,13 @@ if ([string]::IsNullOrWhiteSpace($ApiUrl)) {
 
 Push-Location (Join-Path $PSScriptRoot '..\frontend')
 try {
+  $buildTime = Get-Date -Format 'yyyy-MM-dd HH:mm'
   flutter pub get
   if ($BuildAppBundle) {
-    flutter build appbundle --release --dart-define=API_URL=$ApiUrl
+    flutter build appbundle --release --dart-define=API_URL=$ApiUrl --dart-define=BUILD_TIME=$buildTime
     Write-Host 'AAB: build\app\outputs\bundle\release\app-release.aab' -ForegroundColor Green
   } else {
-    flutter build apk --release --dart-define=API_URL=$ApiUrl
+    flutter build apk --release --dart-define=API_URL=$ApiUrl --dart-define=BUILD_TIME=$buildTime
     Write-Host 'APK: build\app\outputs\flutter-apk\app-release.apk' -ForegroundColor Green
   }
 } finally {
