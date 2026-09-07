@@ -26,6 +26,7 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const db = require('./db');
+const push = require('./push');
 
 const PORT = process.env.PORT || 3000;
 
@@ -220,7 +221,14 @@ io.on('connection', (socket) => {
     if (!me) return;
     const res = await db.requestFriend(me.userId, username);
     if (typeof ack === 'function') ack(res);
-    if (res.ok && res.target) emitToUser(res.target.user_id, 'social:refresh', {});
+    if (res.ok && res.target) {
+      emitToUser(res.target.user_id, 'social:refresh', {});
+      push.sendToUser(db, res.target.user_id, {
+        title: 'New friend request',
+        body: `${me.username} wants to be friends`,
+        data: { type: 'friend-request', fromUserId: me.userId },
+      });
+    }
   });
 
   socket.on('friend:accept', async ({ userId } = {}, ack) => {
@@ -324,6 +332,26 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack({ ok: true, id: msg.id });
     // Persist best-effort AFTER broadcast (realtime never waits on the DB).
     db.saveDmMessage(msg);
+    // Notify other members' devices (best-effort chain, never blocking).
+    db.getMembers(conversationId)
+      .then((members) =>
+        db.getConversation(conversationId).then((conv) => ({ members, conv })),
+      )
+      .then(({ members, conv }) => {
+        const title =
+          conv && conv.kind === 'group' && conv.name
+            ? `${msg.authorName} in ${conv.name}`
+            : msg.authorName;
+        for (const m of members || []) {
+          if (m.userId === msg.authorId) continue;
+          push.sendToUser(db, m.userId, {
+            title,
+            body: msg.content.slice(0, 120),
+            data: { type: 'dm', conversationId },
+          });
+        }
+      })
+      .catch(() => {/* push is best-effort */});
   });
 
   socket.on('group:create', async ({ name, memberIds } = {}, ack) => {
@@ -357,6 +385,13 @@ io.on('connection', (socket) => {
   });
 
   // -- Profile: own row, rename, avatar ---------------------------------------
+  socket.on('push:register', async ({ token, platform } = {}) => {
+    // Best-effort device token for FCM (silent: the client needs no ack).
+    const me = authed.get(socket.id);
+    if (!me || !token) return;
+    await db.savePushToken(me.userId, token, platform || 'android');
+  });
+
   socket.on('profile:me', async (_, ack) => {
     const me = authed.get(socket.id);
     if (!me) {
@@ -459,7 +494,14 @@ io.on('connection', (socket) => {
     const c = calls.get(callId);
     if (!c) return;
     calls.delete(callId);
-    io.to(callRoom(callId)).emit('call:ended', { callId, reason });
+    const payload = { callId, reason };
+    // Room emit alone is NOT enough: before accept nobody joined the room,
+    // so decline/missed would never reach a waiting caller. Notify the
+    // caller socket and every callee socket directly (dupes are harmless:
+    // clients ignore events for unknown/finished callIds).
+    io.to(callRoom(callId)).emit('call:ended', payload);
+    io.to(c.callerSocketId).emit('call:ended', payload);
+    emitToUser(c.calleeUserId, 'call:ended', payload);
   }
 
   socket.on('call:invite', async ({ targetUserId } = {}, ack) => {
@@ -488,6 +530,12 @@ io.on('connection', (socket) => {
       fromUsername: me.username,
     });
     if (typeof ack === 'function') ack({ ok: true, callId });
+    // Ring their devices too (no-op until Firebase is configured).
+    push.sendToUser(db, targetUserId, {
+      title: `${me.username} is calling…`,
+      body: 'Tap to answer in TellAviv',
+      data: { type: 'call', callId },
+    });
     setTimeout(() => {
       const c = calls.get(callId);
       if (c && c.state === 'ringing') endCall(callId, 'missed');
@@ -505,8 +553,15 @@ io.on('connection', (socket) => {
     }
     c.state = 'active';
     c.calleeSocketId = socket.id;
-    // Callee's other devices: stop ringing them.
-    emitToUser(c.calleeUserId, 'call:cancelled', { callId });
+    // Callee's OTHER devices: stop ringing them. The acceptor itself is
+    // excluded — it just got this call and a cancelled for its own callId
+    // would make the client tear the fresh session down (the "answers then
+    // everything breaks" bug).
+    for (const [sid, u] of onlineUsers.entries()) {
+      if (u.userId === c.calleeUserId && sid !== socket.id) {
+        io.to(sid).emit('call:cancelled', { callId });
+      }
+    }
     socket.join(callRoom(callId));
     const caller = io.sockets.sockets.get(c.callerSocketId);
     if (caller) caller.join(callRoom(callId));

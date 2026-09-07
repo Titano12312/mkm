@@ -506,6 +506,50 @@ async function saveDmMessage(msg) {
   return true;
 }
 
+/** Single conversation header (for push titles). */
+async function getConversation(conversationId) {
+  if (!supabase || !conversationId) return null;
+  const { data, error } = await supabase
+    .from('conversations')
+    .select('id,kind,name')
+    .eq('id', conversationId)
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  return data[0];
+}
+
+// ---------------------------------------------------------------------------
+// Push tokens (FCM device registry; consumed by push.js, dormant w/o key).
+// ---------------------------------------------------------------------------
+
+async function savePushToken(userId, token, platform = 'android') {
+  if (!supabase || !token) return { ok: false };
+  const { error } = await supabase.from('push_tokens').upsert(
+    { token: String(token).slice(0, 500), user_id: userId, platform, updated_at: new Date().toISOString() },
+    { onConflict: 'token' },
+  );
+  if (error) {
+    console.warn('[db] savePushToken failed:', error.message);
+    return { ok: false };
+  }
+  return { ok: true };
+}
+
+async function getPushTokens(userId) {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('push_tokens').select('token').eq('user_id', userId);
+  if (error) {
+    console.warn('[db] getPushTokens failed:', error.message);
+    return [];
+  }
+  return (data || []).map((r) => r.token);
+}
+
+async function removePushToken(token) {
+  if (!supabase) return;
+  await supabase.from('push_tokens').delete().eq('token', token);
+}
+
 module.exports = {
   HISTORY_LIMIT,
   FALLBACK_CHANNELS,
@@ -534,4 +578,8 @@ module.exports = {
   leaveGroup,
   getDmHistory,
   saveDmMessage,
+  getConversation,
+  savePushToken,
+  getPushTokens,
+  removePushToken,
 };

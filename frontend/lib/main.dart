@@ -14,6 +14,7 @@ import 'widgets/call_overlay.dart';
 import 'widgets/channel_sidebar.dart';
 import 'widgets/chat_view.dart';
 import 'widgets/home_empty.dart';
+import 'widgets/message_toast.dart';
 import 'widgets/voice_bar.dart';
 
 /// Breakpoint: ≥800 logical px = desktop (persistent sidebar),
@@ -137,11 +138,13 @@ class _ConnectorState extends State<_Connector> {
 
   @override
   Widget build(BuildContext context) {
-    // Call overlay floats above the shell on both layouts.
+    // Call overlay floats above the shell on both layouts; the toast host
+    // is invisible and just watches for background arrivals.
     return const Stack(
       children: [
         HomeShell(),
         CallOverlayHost(),
+        MessageToastHost(),
       ],
     );
   }

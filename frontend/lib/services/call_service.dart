@@ -42,6 +42,11 @@ class CallService extends ChangeNotifier {
   MediaStream? _local;
   io.Socket? _wiredSocket;
 
+  /// Set between our accept() emit and the matching call:accepted.
+  /// A stale 'cancelled' arriving in that window must not kill the session
+  /// we just accepted (server excludes the acceptor, this is the belt).
+  bool _acceptSent = false;
+
   static const _rtcConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -112,9 +117,15 @@ class CallService extends ChangeNotifier {
 
   Future<void> accept() async {
     if (phase != CallPhase.incoming || callId == null) return;
-    if (!await _startLocal(errorContext: 'accept')) return;
+    final id = callId!;
+    if (!await _startLocal(errorContext: 'accept')) {
+      // Mic dead: decline so the caller isn't left ringing till timeout.
+      signaling.callDecline(id);
+      return;
+    }
     await _ensurePc();
-    signaling.callAccept(callId!);
+    _acceptSent = true;
+    signaling.callAccept(id);
     phase = CallPhase.active;
     connectedAt = DateTime.now();
     notifyListeners();
@@ -192,10 +203,22 @@ class CallService extends ChangeNotifier {
 
   /// Caller side: create the offer once the callee accepted.
   Future<void> _dial() async {
-    if (!await _startLocal(errorContext: 'dial')) return;
+    final id = callId;
+    if (!await _startLocal(errorContext: 'dial')) {
+      // _startLocal already reset locally (callId is null now): use the
+      // captured id so the waiting callee is still released.
+      if (id != null) signaling.callEnd(id);
+      return;
+    }
     await _ensurePc();
     final offer = await _pc?.createOffer();
-    if (offer == null || peerSocketId == null) return;
+    if (offer == null || peerSocketId == null) {
+      lastOutcome = 'Call setup failed — retry.';
+      final hungId = callId;
+      _reset(keepOutcome: true);
+      if (hungId != null) signaling.callEnd(hungId);
+      return;
+    }
     await _pc?.setLocalDescription(offer);
     signaling.rawSocket?.emit('webrtc:offer', {
       'targetSocketId': peerSocketId,
@@ -207,6 +230,9 @@ class CallService extends ChangeNotifier {
     try {
       final m = Map<String, dynamic>.from(data as Map);
       if (m['callId'] != callId) return;
+      // 'cancelled' carries no reason. If WE just accepted, a stale
+      // cancelled (e.g. our own accept echo) must not kill the session.
+      if (!m.containsKey('reason') && _acceptSent) return;
       final reason = (m['reason'] ?? 'ended') as String;
       final wasOutgoing = phase == CallPhase.outgoing;
       _reset();
@@ -293,6 +319,7 @@ class CallService extends ChangeNotifier {
 
   void _reset({bool keepOutcome = false}) {
     final outcome = keepOutcome ? lastOutcome : null;
+    _acceptSent = false;
     _pc?.close();
     _pc = null;
     _local?.dispose();
