@@ -7,7 +7,7 @@
 ; on the client — the app talks to your hosted backend over WebSocket.
 
 #define MyAppName "TellAviv"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "TellAviv Friends"
 #define MyAppExeName "tellaviv.exe"
 ; Flutter emits to frontend\build\windows\x64\runner\Release — resolved
