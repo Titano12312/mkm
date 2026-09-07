@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../core/motion.dart';
 import '../services/call_service.dart';
 import '../services/socket_service.dart';
+import '../services/voice_service.dart';
 import 'user_avatar.dart';
 
 /// Message viewport + input box, in two modes:
@@ -78,6 +79,9 @@ class _ChatViewState extends State<ChatView> {
       subtitle = conv.kind == 'group' ? '${conv.members.length} members' : 'Direct message';
       rows = chat
           .convMessagesFor(conv.id)
+          // Blocked authors stay hidden (shared-group case). DMs with
+          // blocked parties can't receive new messages anyway (rejected).
+          .where((m) => !chat.blockedIds.contains(m.authorId))
           .map((m) => _RowData(
                 id: m.id,
                 authorId: m.authorId,
@@ -169,6 +173,28 @@ class _ChatViewState extends State<ChatView> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Could not start call ($err).')),
                       );
+                    }
+                  },
+                ),
+              if (inConversation && conv.kind == 'group')
+                IconButton(
+                  // Group voice room: same click-to-join mesh as channels,
+                  // keyed by conversation. VoiceBar shows who's inside.
+                  tooltip: chat.activeVoiceChannelId == conv.id ? 'Leave voice' : 'Join voice',
+                  icon: Icon(
+                    chat.activeVoiceChannelId == conv.id ? Icons.volume_off : Icons.volume_up,
+                    size: 20,
+                  ),
+                  color: chat.activeVoiceChannelId == conv.id
+                      ? Colors.greenAccent
+                      : Colors.grey[400],
+                  onPressed: () async {
+                    final voice = context.read<VoiceService>();
+                    if (chat.activeVoiceChannelId == conv.id) {
+                      await voice.leave();
+                    } else {
+                      if (voice.inCall) await voice.leave();
+                      await voice.join(conv.id);
                     }
                   },
                 ),

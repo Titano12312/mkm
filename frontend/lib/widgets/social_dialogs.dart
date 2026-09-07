@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/app_models.dart';
 import '../services/socket_service.dart';
 
 /// Shared social dialogs (used by the sidebar AND the empty home).
@@ -91,10 +92,120 @@ String _friendErrorText(String code) {
       return 'You are already friends.';
     case 'already-pending':
       return 'Invite already pending.';
+    case 'unblock-first':
+      return 'Unblock them first.';
     case 'offline':
       return 'Not connected — retry in a moment.';
     default:
       return 'Could not send invite ($code).';
+  }
+}
+
+/// Long-press actions on a friend: block (reversible, undo offered) or
+/// remove (confirmed — ends the friendship both ways, re-addable anytime).
+Future<void> showFriendActions(BuildContext context, SocialUser friend) async {
+  final action = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF2B2D31),
+      title: Text(friend.username,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white, fontSize: 16)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop('block'),
+          child: const Text('Block', style: TextStyle(color: Colors.redAccent)),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop('remove'),
+          child: const Text('Remove friend', style: TextStyle(color: Colors.redAccent)),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    ),
+  );
+  if (!context.mounted) return;
+  final chat = context.read<SocketService>();
+  if (action == 'block') {
+    final ok = await chat.blockFriend(friend.userId);
+    if (!context.mounted) return;
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Blocked ${friend.username}.'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => chat.unblockFriend(friend.userId),
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not block — retry.')),
+      );
+    }
+  } else if (action == 'remove') {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2B2D31),
+        title: Text('Remove ${friend.username}?',
+            style: const TextStyle(color: Colors.white, fontSize: 16)),
+        content: const Text('You will stop seeing each other. Re-adding is always possible.',
+            style: TextStyle(color: Colors.grey, fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Stay friends')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && context.mounted) {
+      final ok = await context.read<SocketService>().removeFriend(friend.userId);
+      if (context.mounted && !ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not remove — retry.')),
+        );
+      }
+    }
+  }
+}
+
+/// Clear-the-whole-list confirm. Scope is spelled out: friendships, pending
+/// invites both ways, and my blocks go; conversations stay as history and
+/// groups need a separate leave.
+Future<void> showClearFriendsConfirm(BuildContext context) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF2B2D31),
+      title: const Text('Clear friends list?',
+          style: TextStyle(color: Colors.white, fontSize: 16)),
+      content: const Text(
+        'Removes all friends, pending invites and blocks. Chats stay as history; leave groups separately.',
+        style: TextStyle(color: Colors.grey, fontSize: 13),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Keep')),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Clear all', style: TextStyle(color: Colors.redAccent)),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true && context.mounted) {
+    final ok = await context.read<SocketService>().clearFriends();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ok ? 'Friends list cleared.' : 'Could not clear — retry.')),
+      );
+    }
   }
 }
 

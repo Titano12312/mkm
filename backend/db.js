@@ -206,11 +206,11 @@ async function setAvatarUrl(userId, url) {
  * callers store the promise and await it on leave, so a fast
  * join→leave still closes the right row.
  */
-async function logVoiceJoin({ channelId, userId, username }) {
+async function logVoiceJoin({ channelId = null, conversationId = null, userId, username }) {
   if (!supabase) return null;
   const { data, error } = await supabase
     .from('voice_sessions')
-    .insert({ channel_id: channelId, user_id: userId, username })
+    .insert({ channel_id: channelId, conversation_id: conversationId, user_id: userId, username })
     .select('id')
     .single();
   if (error) {
@@ -275,6 +275,11 @@ async function requestFriend(requesterId, targetUsername) {
   const target = await findUserByUsername(targetUsername);
   if (!target) return { ok: false, error: 'not-found' };
   if (target.user_id === requesterId) return { ok: false, error: 'self' };
+  if (await isBlocked(requesterId, target.user_id)) {
+    return { ok: false, error: 'unblock-first' };
+  }
+  // They blocked you: same face as not-found (never leak someone's block).
+  if (await isBlocked(target.user_id, requesterId)) return { ok: false, error: 'not-found' };
   const { data: existing } = await supabase
     .from('friendships')
     .select('status')
@@ -332,8 +337,81 @@ async function declineFriend(userId, requesterId) {
   return { ok: true };
 }
 
+/** One-way block check: has a blocked b? */
+async function isBlocked(a, b) {
+  if (!supabase) return false;
+  const { data } = await supabase
+    .from('friendships')
+    .select('status')
+    .eq('user_id', a)
+    .eq('friend_id', b)
+    .eq('status', 'blocked')
+    .limit(1);
+  return !!(data && data.length > 0);
+}
+
+/**
+ * Block: ends any friendship/pending both ways, then records a one-way
+ * blocked row (no mirror — the target just stops seeing you).
+ */
+async function blockUser(me, targetId) {
+  if (!supabase) return { ok: false, error: 'db-unavailable' };
+  if (me === targetId) return { ok: false, error: 'self' };
+  const target = await getProfile(targetId);
+  if (!target) return { ok: false, error: 'not-found' };
+  await supabase.from('friendships').delete().or(
+    `and(user_id.eq.${me},friend_id.eq.${targetId}),and(user_id.eq.${targetId},friend_id.eq.${me})`,
+  );
+  const { error } = await supabase
+    .from('friendships')
+    .upsert({ user_id: me, friend_id: targetId, status: 'blocked' }, { onConflict: 'user_id,friend_id' });
+  if (error) {
+    console.warn('[db] blockUser failed:', error.message);
+    return { ok: false, error: 'db-error' };
+  }
+  return { ok: true };
+}
+
+async function unblockUser(me, targetId) {
+  if (!supabase) return { ok: false };
+  await supabase
+    .from('friendships')
+    .delete()
+    .eq('user_id', me)
+    .eq('friend_id', targetId)
+    .eq('status', 'blocked');
+  return { ok: true };
+}
+
+/** Remove a friend: drops every edge both ways (accepted + pending). */
+async function removeFriend(me, targetId) {
+  if (!supabase) return { ok: false };
+  await supabase.from('friendships').delete().or(
+    `and(user_id.eq.${me},friend_id.eq.${targetId}),and(user_id.eq.${targetId},friend_id.eq.${me})`,
+  );
+  return { ok: true };
+}
+
+/**
+ * Clear my whole social graph: every row I own (friends, pendings, my
+ * blocks) plus mirrors and incoming requests. Someone ELSE's block of me
+ * is their state, not mine — left untouched.
+ */
+async function clearFriends(me) {
+  if (!supabase) return { ok: false };
+  await supabase.from('friendships').delete().eq('user_id', me);
+  await supabase
+    .from('friendships')
+    .delete()
+    .eq('friend_id', me)
+    .in('status', ['accepted', 'pending']);
+  return { ok: true };
+}
+
 async function areFriends(a, b) {
   if (!supabase) return false;
+  // A block either way voids the friendship, even with a stale mirror row.
+  if ((await isBlocked(a, b)) || (await isBlocked(b, a))) return false;
   const { data } = await supabase
     .from('friendships')
     .select('status')
@@ -346,18 +424,19 @@ async function areFriends(a, b) {
 
 /** Full social snapshot for friend:list. */
 async function listSocial(userId) {
-  if (!supabase) return { friends: [], pendingIn: [], pendingOut: [] };
+  if (!supabase) return { friends: [], pendingIn: [], pendingOut: [], blocked: [] };
   const { data: mine } = await supabase.from('friendships').select('friend_id,status').eq('user_id', userId);
   const rows = mine || [];
   const friendIds = rows.filter((r) => r.status === 'accepted').map((r) => r.friend_id);
   const outIds = rows.filter((r) => r.status === 'pending').map((r) => r.friend_id);
+  const blockedIds = rows.filter((r) => r.status === 'blocked').map((r) => r.friend_id);
   const { data: incoming } = await supabase
     .from('friendships')
     .select('user_id')
     .eq('friend_id', userId)
     .eq('status', 'pending');
   const inIds = (incoming || []).map((r) => r.user_id);
-  const profiles = await getProfiles([...new Set([...friendIds, ...outIds, ...inIds])]);
+  const profiles = await getProfiles([...new Set([...friendIds, ...outIds, ...inIds, ...blockedIds])]);
   const shape = (id) => {
     const p = profiles.get(id);
     return {
@@ -371,6 +450,7 @@ async function listSocial(userId) {
     friends: friendIds.map(shape),
     pendingIn: inIds.map(shape),
     pendingOut: outIds.map(shape),
+    blocked: blockedIds.map(shape),
   };
 }
 
@@ -466,6 +546,19 @@ async function leaveGroup(conversationId, userId) {
     await supabase.from('conversations').delete().eq('id', conversationId);
   }
   return { ok: true };
+}
+
+/** DM-only block gate: true when sender and the other 1:1 party blocked
+ * each other either way. Groups are excluded — shared history stays
+ * visible and clients hide blocked authors instead. */
+async function conversationBlocked(senderId, conversationId) {
+  if (!supabase) return false;
+  const conv = await getConversation(conversationId);
+  if (!conv || conv.kind !== 'dm') return false;
+  const members = await getMembers(conversationId);
+  const other = members.map((m) => m.userId).find((id) => id !== senderId);
+  if (!other) return false;
+  return (await isBlocked(senderId, other)) || (await isBlocked(other, senderId));
 }
 
 async function getDmHistory(conversationId) {
@@ -568,6 +661,11 @@ module.exports = {
   requestFriend,
   acceptFriend,
   declineFriend,
+  isBlocked,
+  blockUser,
+  unblockUser,
+  removeFriend,
+  clearFriends,
   areFriends,
   listSocial,
   findOrCreateDm,
@@ -578,6 +676,7 @@ module.exports = {
   leaveGroup,
   getDmHistory,
   saveDmMessage,
+  conversationBlocked,
   getConversation,
   savePushToken,
   getPushTokens,

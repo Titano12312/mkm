@@ -59,6 +59,8 @@ class _MessageToastHostState extends State<MessageToastHost> {
               : chat.convMessagesFor(id).last.authorId)
           : (chat.messagesFor(id).isEmpty ? null : chat.messagesFor(id).last.authorId);
       if (lastAuthor == chat.userId) continue;
+      // Blocked authors stay silent everywhere, toasts included.
+      if (lastAuthor != null && chat.blockedIds.contains(lastAuthor)) continue;
 
       final label = isConv
           ? (chat.conversationById(id)?.title(chat.userId) ?? 'New message')

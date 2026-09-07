@@ -145,6 +145,8 @@ class ChannelSidebar extends StatelessWidget {
                       }
                       onNavigate?.call();
                     },
+                    // Long-press: block / remove without cluttering the row.
+                    onLongPress: () => showFriendActions(context, f),
                   ),
                 if (chat.friends.isEmpty && chat.pendingIn.isEmpty)
                   const Padding(
@@ -190,6 +192,7 @@ class ChannelSidebar extends StatelessWidget {
                   _GroupRow(
                     name: (g.name?.isNotEmpty ?? false) ? g.name! : 'Group',
                     members: g.members.length,
+                    voiceCount: chat.groupVoiceCounts[g.id] ?? 0,
                     selected: g.id == chat.activeConversationId,
                     onTap: () {
                       chat.openConversation(g.id);
@@ -202,6 +205,30 @@ class ChannelSidebar extends StatelessWidget {
                     child: Text('No groups — tap + to create one with friends.',
                         style: TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
+                // Blocked users live at the bottom, out of the way, with a
+                // one-tap way back. Nothing here is a dead end.
+                if (chat.blocked.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  _SectionLabel('BLOCKED'),
+                  for (final b in chat.blocked)
+                    _BlockedRow(
+                      name: b.username,
+                      avatarUrl: b.avatarUrl,
+                      onUnblock: () => chat.unblockFriend(b.userId),
+                    ),
+                ],
+                if (chat.friends.isNotEmpty ||
+                    chat.pendingIn.isNotEmpty ||
+                    chat.pendingOut.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Center(
+                    child: TextButton(
+                      onPressed: () => showClearFriendsConfirm(context),
+                      child: const Text('Clear friends list',
+                          style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -402,12 +429,14 @@ class _FriendRow extends StatelessWidget {
   final bool online;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   const _FriendRow(
       {required this.name,
       this.avatarUrl,
       required this.online,
       required this.selected,
-      required this.onTap});
+      required this.onTap,
+      this.onLongPress});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -421,6 +450,7 @@ class _FriendRow extends StatelessWidget {
           ),
           child: _Pressable(
             onTap: onTap,
+            onLongPress: onLongPress,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Row(
@@ -499,12 +529,53 @@ class _RequestRow extends StatelessWidget {
       );
 }
 
+/// Blocked user row: name + one-tap way back. Nothing here is a dead end.
+class _BlockedRow extends StatelessWidget {
+  final String name;
+  final String? avatarUrl;
+  final VoidCallback onUnblock;
+  const _BlockedRow({required this.name, this.avatarUrl, required this.onUnblock});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF383A40),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              UserAvatar(avatarUrl: avatarUrl, username: name, radius: 12),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(name,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              ),
+              TextButton(
+                onPressed: onUnblock,
+                child: const Text('Unblock', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
 class _GroupRow extends StatelessWidget {
   final String name;
   final int members;
+  final int voiceCount;
   final bool selected;
   final VoidCallback onTap;
-  const _GroupRow({required this.name, required this.members, required this.selected, required this.onTap});
+  const _GroupRow(
+      {required this.name,
+      required this.members,
+      this.voiceCount = 0,
+      required this.selected,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -531,6 +602,14 @@ class _GroupRow extends StatelessWidget {
                         style: TextStyle(
                             color: selected ? Colors.white : Colors.grey[400], fontSize: 14)),
                   ),
+                  // Live voice badge: who is talking right now in this group.
+                  if (voiceCount > 0) ...[
+                    const Icon(Icons.volume_up, size: 13, color: Colors.greenAccent),
+                    const SizedBox(width: 3),
+                    Text('$voiceCount',
+                        style: const TextStyle(color: Colors.greenAccent, fontSize: 11)),
+                    const SizedBox(width: 6),
+                  ],
                   Text('$members',
                       style: const TextStyle(color: Colors.grey, fontSize: 11)),
                 ],
@@ -552,7 +631,8 @@ const kBrandLight = Color(0xFFFF9E9E);
 class _Pressable extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
-  const _Pressable({required this.child, required this.onTap});
+  final VoidCallback? onLongPress;
+  const _Pressable({required this.child, required this.onTap, this.onLongPress});
   @override
   State<_Pressable> createState() => _PressableState();
 }
@@ -566,6 +646,7 @@ class _PressableState extends State<_Pressable> {
       onTapUp: (_) => setState(() => _down = false),
       onTapCancel: () => setState(() => _down = false),
       onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
       child: AnimatedScale(
         scale: _down ? 0.97 : 1.0,
         duration: Motion.fast,

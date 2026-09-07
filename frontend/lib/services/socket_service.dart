@@ -52,9 +52,11 @@ class SocketService extends ChangeNotifier {
   List<SocialUser> friends = [];
   List<SocialUser> pendingIn = [];
   List<SocialUser> pendingOut = [];
+  List<SocialUser> blocked = [];
   List<Conversation> conversations = [];
   String? activeConversationId;
   final Map<String, List<DmMessage>> dmMessagesByConv = {};
+  Map<String, int> groupVoiceCounts = {}; // conversationId -> live voice occupants
 
   SocketService({required this.username, required this.userId, String? Function()? tokenProvider})
       : tokenProvider = tokenProvider ?? (() => null),
@@ -159,6 +161,14 @@ class SocketService extends ChangeNotifier {
     socket.on('voice:directory', (data) {
       final list = (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
       voiceCounts = {for (final e in list) e['channelId'] as String: (e['count'] ?? 0) as int};
+      notifyListeners();
+    });
+
+    socket.on('groupvoice:directory', (data) {
+      final list = (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+      groupVoiceCounts = {
+        for (final e in list) e['conversationId'] as String: (e['count'] ?? 0) as int
+      };
       notifyListeners();
     });
 
@@ -345,6 +355,9 @@ class SocketService extends ChangeNotifier {
       pendingOut = ((friendsAck['pendingOut'] ?? []) as List)
           .map((e) => SocialUser.fromJson(Map<String, dynamic>.from(e)))
           .toList();
+      blocked = ((friendsAck['blocked'] ?? []) as List)
+          .map((e) => SocialUser.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
     }
     final convAck = await _emitAck('conversation:list', {});
     if (convAck != null && convAck['ok'] == true) {
@@ -378,6 +391,58 @@ class SocketService extends ChangeNotifier {
   Future<bool> declineFriend(String userId) async {
     final ack = await _emitAck('friend:decline', {'userId': userId});
     if (ack != null && ack['ok'] == true) {
+      await refreshSocial();
+      return true;
+    }
+    return false;
+  }
+
+  /// Blocked ids for client-side message hiding (shared group history
+  /// stays on the server; we just don't render blocked authors).
+  Set<String> get blockedIds => blocked.map((b) => b.userId).toSet();
+
+  Future<bool> blockFriend(String userId) async {
+    final ack = await _emitAck('friend:block', {'userId': userId});
+    if (ack != null && ack['ok'] == true) {
+      if (activeConversationId != null) {
+        // A blocked DM closes itself rather than lingering dead.
+        final conv = conversationById(activeConversationId);
+        if (conv != null &&
+            conv.kind == 'dm' &&
+            conv.members.any((m) => m.userId == userId)) {
+          closeConversation();
+        }
+      }
+      await refreshSocial();
+      return true;
+    }
+    return false;
+  }
+
+  Future<bool> unblockFriend(String userId) async {
+    final ack = await _emitAck('friend:unblock', {'userId': userId});
+    if (ack != null && ack['ok'] == true) {
+      await refreshSocial();
+      return true;
+    }
+    return false;
+  }
+
+  Future<bool> removeFriend(String userId) async {
+    final ack = await _emitAck('friend:remove', {'userId': userId});
+    if (ack != null && ack['ok'] == true) {
+      await refreshSocial();
+      return true;
+    }
+    return false;
+  }
+
+  /// Wipes every friendship edge (friends, pendings, my blocks).
+  /// Conversations stay as readable history; groups need separate leave.
+  Future<bool> clearFriends() async {
+    final ack = await _emitAck('friends:clear', {});
+    if (ack != null && ack['ok'] == true) {
+      closeConversation();
       await refreshSocial();
       return true;
     }

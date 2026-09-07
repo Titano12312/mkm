@@ -48,44 +48,61 @@ const convRoom = (id) => `conv:${id}`;
 const onlineUsers = new Map(); // socketId -> { userId, username }
 const authed = new Map(); // socketId -> { userId, username } verified via Supabase JWT
 const calls = new Map(); // callId -> { callerSocketId, callerUserId, callerUsername, calleeUserId, calleeSocketId?, state }
-const voiceRooms = new Map(); // voiceChannelId -> Map<socketId, { userId, username }>
-const socketVoiceChannel = new Map(); // socketId -> { channelId, ready: Promise<sessionId|null> }
+const voiceRooms = new Map(); // voiceKey -> Map<socketId, { userId, username }>
+// voiceKey = channel id (catalog rooms) or `g:<conversationId>` (group rooms).
+// socketVoiceChannel: socketId -> { key, id, ready }, where id is the
+// client-facing room id (channel id or conversation id) and ready resolves
+// the durable voice_sessions row (or null).
+const socketVoiceChannel = new Map();
 
 const textRoom = (id) => `text:${id}`;
-const voiceRoom = (id) => `voice:${id}`;
+const voiceRoom = (key) => `voice:${key}`;
+const groupVoiceKey = (convId) => `g:${convId}`;
 
-function voiceParticipants(channelId) {
-  const room = voiceRooms.get(channelId);
+function voiceParticipants(key) {
+  const room = voiceRooms.get(key);
   if (!room) return [];
   return [...room.entries()].map(([socketId, u]) => ({ socketId, ...u }));
 }
 
-function broadcastVoiceUpdate(io, channelId) {
-  io.to(voiceRoom(channelId)).emit('voice:update', {
-    channelId,
-    participants: voiceParticipants(channelId),
+/** Live group-voice occupancy for sidebar badges (catalog rooms use voice:directory). */
+function groupVoiceDirectory() {
+  const out = [];
+  for (const [key, room] of voiceRooms) {
+    if (key.startsWith('g:') && room.size > 0) {
+      out.push({ conversationId: key.slice(2), count: room.size });
+    }
+  }
+  return out;
+}
+
+function broadcastVoiceUpdate(io, key, id) {
+  io.to(voiceRoom(key)).emit('voice:update', {
+    channelId: id,
+    participants: voiceParticipants(key),
   });
   // Global badge counts for the sidebar (who is in which voice channel).
   io.emit(
     'voice:directory',
     channels.voice.map((c) => ({ channelId: c.id, count: (voiceRooms.get(c.id) || new Map()).size })),
   );
+  io.emit('groupvoice:directory', groupVoiceDirectory());
 }
 
 async function leaveVoice(io, socket) {
   const entry = socketVoiceChannel.get(socket.id);
   if (!entry) return;
-  const { channelId } = entry;
+  const { key, id } = entry;
   socketVoiceChannel.delete(socket.id);
-  socket.leave(voiceRoom(channelId));
-  const room = voiceRooms.get(channelId);
+  socket.leave(voiceRoom(key));
+  const room = voiceRooms.get(key);
   if (room) {
     room.delete(socket.id);
-    if (room.size === 0) voiceRooms.delete(channelId);
+    if (room.size === 0) voiceRooms.delete(key);
   }
   // Tell remaining peers to tear down the P2P connection to this socket.
-  socket.to(voiceRoom(channelId)).emit('voice:peer-left', { socketId: socket.id, channelId });
-  broadcastVoiceUpdate(io, channelId);
+  socket.to(voiceRoom(key)).emit('voice:peer-left', { socketId: socket.id, channelId: id });
+  broadcastVoiceUpdate(io, key, id);
   // Close the durable session row. `ready` is awaited (not fire-and-forget)
   // so a fast join→leave still closes the correct row instead of orphaning it.
   // Wrapped: leave must never throw (it also runs on disconnect).
@@ -123,6 +140,7 @@ io.on('connection', (socket) => {
     'voice:directory',
     channels.voice.map((c) => ({ channelId: c.id, count: (voiceRooms.get(c.id) || new Map()).size })),
   );
+  socket.emit('groupvoice:directory', groupVoiceDirectory());
 
   // -- Auth ---------------------------------------------------------------
   // Client sends the Supabase access token obtained at login (Google).
@@ -249,6 +267,44 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack(res);
   });
 
+  socket.on('friend:block', async ({ userId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.blockUser(me.userId, userId);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) {
+      emitToUser(userId, 'social:refresh', {});
+      emitToUser(me.userId, 'social:refresh', {});
+    }
+  });
+
+  socket.on('friend:unblock', async ({ userId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.unblockUser(me.userId, userId);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) emitToUser(me.userId, 'social:refresh', {});
+  });
+
+  socket.on('friend:remove', async ({ userId } = {}, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.removeFriend(me.userId, userId);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) {
+      emitToUser(userId, 'social:refresh', {});
+      emitToUser(me.userId, 'social:refresh', {});
+    }
+  });
+
+  socket.on('friends:clear', async (_, ack) => {
+    const me = requireAuth(ack);
+    if (!me) return;
+    const res = await db.clearFriends(me.userId);
+    if (typeof ack === 'function') ack(res);
+    if (res.ok) emitToUser(me.userId, 'social:refresh', {});
+  });
+
   socket.on('friend:list', async (_, ack) => {
     const me = authed.get(socket.id);
     if (!me) {
@@ -312,6 +368,11 @@ io.on('connection', (socket) => {
     if (!me) return fail('auth-required');
     if (!conversationId || !(await db.isMember(conversationId, me.userId))) {
       return fail('not-member');
+    }
+    // DMs with a blocked party stay shut (either direction). Shared group
+    // history stays visible by design — clients hide blocked authors.
+    if (await db.conversationBlocked(me.userId, conversationId)) {
+      return fail('blocked');
     }
     const text = typeof content === 'string' ? content.trim().slice(0, 2000) : '';
     if (!text) return fail('empty');
@@ -433,38 +494,57 @@ io.on('connection', (socket) => {
     if (res.ok) emitToUser(me.userId, 'social:refresh', {});
   });
 
-  // -- Voice channels (click-to-join / click-to-leave) ------------------------
-  socket.on('voice:join', async ({ channelId } = {}) => {
-    if (!VOICE_IDS.has(channelId)) {
-      socket.emit('voice:error', { error: 'unknown-channel' });
-      return;
-    }
+  // -- Voice rooms: catalog channels AND group rooms (click-to-join) ---------
+  // voice:join takes either { channelId } (catalog, usually empty now) or
+  // { conversationId } (a group the caller belongs to). Client treats the
+  // echoed channelId opaquely — mesh signaling is identical either way.
+  socket.on('voice:join', async ({ channelId, conversationId } = {}) => {
     // Voice seats require auth (sessions are logged under verified identity).
     const identity = authed.get(socket.id);
     if (!identity) {
       socket.emit('voice:error', { error: 'auth-required' });
       return;
     }
+    let key;
+    let id;
+    let sessionInput;
+    if (conversationId) {
+      const conv = await db.getConversation(conversationId);
+      if (!conv || conv.kind !== 'group' || !(await db.isMember(conversationId, identity.userId))) {
+        socket.emit('voice:error', { error: 'not-member' });
+        return;
+      }
+      key = groupVoiceKey(conversationId);
+      id = conversationId;
+      sessionInput = { conversationId };
+    } else if (VOICE_IDS.has(channelId)) {
+      key = channelId;
+      id = channelId;
+      sessionInput = { channelId };
+    } else {
+      socket.emit('voice:error', { error: 'unknown-channel' });
+      return;
+    }
     // Discord rule: one voice room at a time — leave previous first.
-    if (socketVoiceChannel.get(socket.id)?.channelId !== channelId) await leaveVoice(io, socket);
+    if (socketVoiceChannel.get(socket.id)?.key !== key) await leaveVoice(io, socket);
 
     const cleanUser = { userId: identity.userId, username: identity.username };
-    socket.join(voiceRoom(channelId));
-    if (!voiceRooms.has(channelId)) voiceRooms.set(channelId, new Map());
-    voiceRooms.get(channelId).set(socket.id, cleanUser);
+    socket.join(voiceRoom(key));
+    if (!voiceRooms.has(key)) voiceRooms.set(key, new Map());
+    voiceRooms.get(key).set(socket.id, cleanUser);
     // Durable session row opens in the background; `ready` never rejects,
     // so leaveVoice can safely await it even on a fast join→leave.
-    const ready = db.logVoiceJoin({ channelId, ...cleanUser }).catch(() => null);
-    socketVoiceChannel.set(socket.id, { channelId, ready });
+    const ready = db.logVoiceJoin({ ...sessionInput, ...cleanUser }).catch(() => null);
+    socketVoiceChannel.set(socket.id, { key, id, ready });
 
     // Tell the joiner who is already here so it can initiate mesh offers.
-    socket.emit('voice:joined', { channelId, selfId: socket.id, participants: voiceParticipants(channelId) });
+    socket.emit('voice:joined', { channelId: id, selfId: socket.id, participants: voiceParticipants(key) });
     // Tell existing peers a new peer arrived (they wait for its offer).
-    socket.to(voiceRoom(channelId)).emit('voice:peer-joined', {
-      channelId,
+    socket.to(voiceRoom(key)).emit('voice:peer-joined', {
+      channelId: id,
       peer: { socketId: socket.id, userId: cleanUser.userId, username: cleanUser.username },
     });
-    broadcastVoiceUpdate(io, channelId);
+    broadcastVoiceUpdate(io, key, id);
   });
 
   socket.on('voice:leave', async () => leaveVoice(io, socket));
